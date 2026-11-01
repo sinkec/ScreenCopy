@@ -42,9 +42,9 @@ Early development. Picture and sound work on the setup above.
   NetworkManager must manage the card.
 - **If the program crashes while sharing,** the computer has no sound until you start ScreenCopy
   again, which restores the settings.
-- **Not yet confirmed on a real TV:** sound staying in sync with the picture, sound returning after
-  Stop, recovery after a crash, and closing the window while sharing. The test recording feature has
-  not been tried from the window either.
+- **Not yet confirmed on a real TV:** sound staying in sync with the picture, recovery after a crash,
+  and closing the window while sharing. The test recording feature has not been tried from the window
+  either.
 
 ## Install
 

@@ -114,8 +114,8 @@ Network Displays was the default output; it is not ours, so it is never removed 
 
 ## Status (2026-11-01)
 
-Confirmed by the user on the real TV: discovery, connection, firewall, picture with low delay, sound.
-The Debian package is built by `packaging/build-deb.sh`. Not yet confirmed: sound and picture staying in sync, sound returning after Stop, recovery after a
+Confirmed by the user on the real TV: discovery, connection, firewall, picture with low delay, sound, sound returning after Stop.
+The Debian package is built by `packaging/build-deb.sh`. Not yet confirmed: sound and picture staying in sync, recovery after a
 crash, closing the window or Ctrl+C while sharing, the Record button. Author: Matej Jazbinšek, GitHub user `sinkec`.
 
 ## Open questions
