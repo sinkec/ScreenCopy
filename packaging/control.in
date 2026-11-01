@@ -1,7 +1,7 @@
 Package: screencopy
 Version: @VERSION@
 Architecture: @ARCH@
-Maintainer: Matej Jazbinšek <sinkec@users.noreply.github.com>
+Maintainer: Matej Jazbinšek <17124651+sinkec@users.noreply.github.com>
 Homepage: https://github.com/sinkec/ScreenCopy
 Installed-Size: @SIZE@
 Section: video
