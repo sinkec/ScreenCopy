@@ -15,7 +15,7 @@ use crate::capture::monitor::Monitor;
 use crate::capture::recorder::Encoder;
 use crate::firewall;
 use crate::p2p::{P2pClient, P2pError, P2pLink, Peer, SEARCH_SECONDS};
-use crate::wfd::session::SessionEvent;
+use crate::wfd::session::{SessionEvent, Sound};
 use crate::wfd::{self, ServeConfig, ServeEvent};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -223,11 +223,22 @@ impl TvPanel {
             self.show_toast("Choose a monitor first.");
             return;
         };
+        if !firewall::helper_installed() {
+            self.show_setup_dialog();
+            return;
+        }
         // Ends the search loop, if there is one.
         self.search_generation.set(self.search_generation.get() + 1);
         self.set_controls_enabled(false);
 
-        let result = self.run_session(&peer, &monitor).await;
+        let stop = Arc::new(AtomicBool::new(false));
+        self.stop.replace(Some(Arc::clone(&stop)));
+        let banner = &self.widgets.banner;
+        banner.set_title(&format!("Preparing to share with {}…", peer.name));
+        banner.set_button_label(Some("Stop"));
+        banner.set_revealed(true);
+
+        let result = self.run_session(&peer, &monitor, stop).await;
         self.widgets.banner.set_revealed(false);
         self.stop.replace(None);
         if self.close_requested.get() {
@@ -245,12 +256,33 @@ impl TvPanel {
         }
     }
 
-    async fn run_session(&self, peer: &Peer, monitor: &Monitor) -> Result<(), String> {
+    fn show_setup_dialog(&self) {
+        let dialog = adw::AlertDialog::builder()
+            .heading("One More Setup Step")
+            .body(
+                "ScreenCopy needs its firewall helper, so that the TV can connect. \
+                 Install ScreenCopy from its package, or see “Firewall helper” in the README \
+                 when running from source.",
+            )
+            .build();
+        dialog.add_response("close", "Close");
+        dialog.present(Some(&self.widgets.window));
+    }
+
+    async fn run_session(
+        &self,
+        peer: &Peer,
+        monitor: &Monitor,
+        stop: Arc<AtomicBool>,
+    ) -> Result<(), String> {
         self.describe("Waiting for administrator approval…");
         let authorized = gio::spawn_blocking(firewall::authorize).await;
         authorized
             .map_err(|_| "The authorization did not finish.".to_owned())?
             .map_err(|err| err.to_string())?;
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
 
         let encoder = gio::spawn_blocking(Encoder::detect)
             .await
@@ -266,9 +298,13 @@ impl TvPanel {
         if let Err(err) = client.stop_search().await {
             debug!(error = %err, "cannot stop searching");
         }
-        let link = client.connect(peer).await.map_err(|err| err.to_string())?;
+        let link = match client.connect(peer, &stop).await {
+            Ok(link) => link,
+            Err(P2pError::Cancelled) => return Ok(()),
+            Err(err) => return Err(err.to_string()),
+        };
 
-        let result = self.serve_link(&link, peer, monitor, encoder).await;
+        let result = self.serve_link(&link, peer, monitor, encoder, stop).await;
         client.disconnect(link).await;
         result
     }
@@ -279,6 +315,7 @@ impl TvPanel {
         peer: &Peer,
         monitor: &Monitor,
         encoder: Encoder,
+        stop: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let config = ServeConfig {
             interface: link.interface.clone(),
@@ -286,8 +323,6 @@ impl TvPanel {
             region: monitor.capture_region(),
             encoder,
         };
-        let stop = Arc::new(AtomicBool::new(false));
-        self.stop.replace(Some(Arc::clone(&stop)));
         let (sender, events) = mpsc::channel();
         std::thread::Builder::new()
             .name("wfd-session".to_owned())
@@ -295,9 +330,6 @@ impl TvPanel {
             .map_err(|err| format!("Cannot start the session: {err}"))?;
 
         let banner = &self.widgets.banner;
-        banner.set_title(&format!("Connecting to {}…", peer.name));
-        banner.set_button_label(Some("Stop"));
-        banner.set_revealed(true);
         self.describe(&format!("Connected to {}, waiting for the TV…", peer.name));
 
         loop {
@@ -305,7 +337,7 @@ impl TvPanel {
                 Ok(ServeEvent::Session(SessionEvent::Negotiating)) => {
                     self.describe(&format!("Setting up the picture with {}…", peer.name));
                 }
-                Ok(ServeEvent::Session(SessionEvent::Streaming(mode))) => {
+                Ok(ServeEvent::Session(SessionEvent::Streaming(mode, sound))) => {
                     banner.set_title(&format!(
                         "Sharing monitor {} with {}",
                         monitor.name(),
@@ -315,6 +347,15 @@ impl TvPanel {
                         "Sharing at {} × {}, {} frames per second.",
                         mode.width, mode.height, mode.frame_rate
                     ));
+                    match sound {
+                        Sound::System => {}
+                        Sound::Silent => self.show_toast(
+                            "The computer's sound could not be captured, so the TV stays silent.",
+                        ),
+                        Sound::Absent => {
+                            self.show_toast("The TV accepts no sound format ScreenCopy can send.");
+                        }
+                    }
                 }
                 Ok(ServeEvent::Ended(result)) => return result,
                 Err(TryRecvError::Empty) => glib::timeout_future(EVENT_POLL_INTERVAL).await,

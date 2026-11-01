@@ -9,6 +9,7 @@ use tracing::{debug, error};
 
 use super::recording::{Recording, RecordingWidgets};
 use super::tv::{TvPanel, TvWidgets};
+use super::{APP_ID, about};
 use crate::audio;
 use crate::capture::monitor::{self, Monitor, MonitorError};
 use crate::firewall;
@@ -184,6 +185,17 @@ fn restore_firewall(toasts: &adw::ToastOverlay) {
     });
 }
 
+/// Makes the icon available when running from the source tree. An installed
+/// program finds it in the system's icon theme.
+pub fn prepare_icons() {
+    gtk::Window::set_default_icon_name(APP_ID);
+    #[cfg(debug_assertions)]
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::IconTheme::for_display(&display)
+            .add_search_path(concat!(env!("CARGO_MANIFEST_DIR"), "/data/icons"));
+    }
+}
+
 pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let picker = MonitorPicker::new();
     picker.refresh();
@@ -193,8 +205,17 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         .tooltip_text("Refresh Monitors")
         .build();
 
+    let menu = gio::Menu::new();
+    menu.append(Some("About ScreenCopy"), Some("win.about"));
+    let menu_button = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Main Menu")
+        .menu_model(&menu)
+        .build();
+
     let header = adw::HeaderBar::new();
     header.pack_start(&refresh);
+    header.pack_end(&menu_button);
 
     // Monitor names come from the X server, so they are not markup.
     let banner = adw::Banner::builder().use_markup(false).build();
@@ -211,11 +232,17 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("ScreenCopy")
+        .title(about::NAME)
+        .icon_name(APP_ID)
         .default_width(520)
         .default_height(640)
         .content(&toasts)
         .build();
+
+    let about_action = gio::ActionEntry::builder("about")
+        .activate(|window: &adw::ApplicationWindow, _, _| about::show_dialog(window))
+        .build();
+    window.add_action_entries([about_action]);
 
     // Sharing and recording exclude each other, and neither allows changing
     // the monitor while running.

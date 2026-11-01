@@ -150,6 +150,11 @@ fn helper_failure(status: ExitStatus, child: &mut Child) -> FirewallError {
     })
 }
 
+/// Whether the helper has been installed, which sharing cannot do without.
+pub fn helper_installed() -> bool {
+    Path::new(HELPER_PATH).exists()
+}
+
 /// Whether a helper that is gone left firewall rules behind.
 pub fn has_stale_rules() -> bool {
     match fs::read_to_string(MARKER_PATH) {

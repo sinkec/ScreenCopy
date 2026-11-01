@@ -11,7 +11,6 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
-const APP_ID: &str = "io.github.sinek.ScreenCopy";
 const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 fn main() -> glib::ExitCode {
@@ -26,10 +25,16 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::FAILURE;
     }
 
-    let app = adw::Application::builder().application_id(APP_ID).build();
+    let app = adw::Application::builder()
+        .application_id(ui::APP_ID)
+        .build();
+    app.connect_startup(|_| ui::window::prepare_icons());
     app.connect_activate(|app| match app.active_window() {
         Some(window) => window.present(),
-        None => ui::window::build(app).present(),
+        None => {
+            let app_for_window = app.clone();
+            ui::splash::show(app, move || ui::window::build(&app_for_window).present());
+        }
     });
     if let Err(err) = close_window_on_signals(&app) {
         error!(error = %err, "cannot watch for termination signals");

@@ -1,0 +1,15 @@
+Package: screencopy
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Matej Jazbinšek <sinkec@users.noreply.github.com>
+Homepage: https://github.com/sinkec/ScreenCopy
+Installed-Size: @SIZE@
+Section: video
+Priority: optional
+Depends: libgtk-4-1 (>= 4.14), libadwaita-1-0 (>= 1.5), libgstreamer1.0-0 (>= 1.24), gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, network-manager, iptables, pkexec, pulseaudio-utils, librsvg2-common
+Recommends: gstreamer1.0-plugins-ugly
+Description: Mirror one monitor to a TV over Miracast
+ ScreenCopy clones one selected monitor to a Miracast TV, with sound, on an
+ X11 desktop. It runs without root privileges. A small helper opens the
+ firewall only on the Wi-Fi Direct connection and only during a session.
+ There is no telemetry.

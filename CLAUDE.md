@@ -112,6 +112,13 @@ restored on drop or on the next start after a crash. Tests use `FakePactl` and m
 user's real sound system. On this machine a leftover `gnome_network_displays` null sink from GNOME
 Network Displays was the default output; it is not ours, so it is never removed automatically.
 
+## Status (2026-11-01)
+
+Confirmed by the user on the real TV: discovery, connection, firewall, picture with low delay, sound.
+The Debian package is built by `packaging/build-deb.sh`. Not yet confirmed: sound and picture staying in sync, sound returning after Stop, recovery after a
+crash, closing the window or Ctrl+C while sharing, the Record button. Author: Matej Jazbinšek, GitHub user `sinkec`.
+
 ## Open questions
 
-- Before publishing: `APP_ID` in `src/main.rs` is a placeholder until the GitHub username is known.
+- Real fuzz targets (`cargo-fuzz`) need a nightly toolchain, postponed: the user is not familiar with
+  them, and deterministic tests with damaged input cover the parsers for now.

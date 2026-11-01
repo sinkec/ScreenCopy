@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 use super::monitor::CaptureRegion;
 use super::recorder::{Encoder, screen_source};
 use crate::audio::{AudioRoute, MONITOR_SOURCE};
-use crate::wfd::session::{MediaStream, StreamTarget};
+use crate::wfd::session::{MediaStream, Sound, StreamTarget};
 
 /// Silence, for when the computer's sound cannot be captured: some TVs expect
 /// a stream to carry audio.
@@ -26,11 +26,13 @@ pub struct ScreenStream {
 
 impl ScreenStream {
     pub fn new(region: CaptureRegion, encoder: Encoder, local_address: Ipv4Addr) -> Self {
-        Self::with_source(
+        let mut stream = Self::with_source(
             screen_source(region.with_even_size()),
             encoder,
             local_address,
-        )
+        );
+        stream.use_system_audio = true;
+        stream
     }
 
     fn with_source(source: String, encoder: Encoder, local_address: Ipv4Addr) -> Self {
@@ -115,7 +117,7 @@ fn stream_description(
 }
 
 impl MediaStream for ScreenStream {
-    fn start(&mut self, target: StreamTarget) -> Result<(), String> {
+    fn start(&mut self, target: StreamTarget) -> Result<Sound, String> {
         let audio_source = (target.with_audio && gst::ElementFactory::find(AAC_ENCODER).is_some())
             .then(|| self.audio_source());
         let description = stream_description(
@@ -131,7 +133,11 @@ impl MediaStream for ScreenStream {
             .set_state(gst::State::Playing)
             .map_err(|error| error.to_string())?;
         self.pipeline = Some(pipeline);
-        Ok(())
+        Ok(match (&audio_source, &self.audio_route) {
+            (None, _) => Sound::Absent,
+            (Some(_), None) => Sound::Silent,
+            (Some(_), Some(_)) => Sound::System,
+        })
     }
 
     fn poll_failure(&mut self) -> Option<String> {
@@ -315,6 +321,18 @@ mod tests {
         );
         // Parsing builds every element and sets every property, without starting.
         gst::parse::launch(&description).unwrap();
+    }
+
+    #[test]
+    fn a_real_screen_stream_uses_the_system_sound() {
+        let region = CaptureRegion {
+            start_x: 0,
+            start_y: 0,
+            end_x: 1919,
+            end_y: 1079,
+        };
+        let stream = ScreenStream::new(region, Encoder::software(), LOCAL);
+        assert!(stream.use_system_audio);
     }
 
     #[test]

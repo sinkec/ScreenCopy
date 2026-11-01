@@ -1,51 +1,112 @@
 # ScreenCopy
 
-Clone one monitor to a TV over Miracast (Wi-Fi Display) on Linux Mint (Cinnamon, X11).
+<img src="data/icons/hicolor/128x128/apps/io.github.sinkec.ScreenCopy.png" align="right" alt="" width="96">
 
-**Status: early development.** The program mirrors one monitor to a Miracast TV, with sound. It can
-also record a monitor to an MPEG-TS file with a live preview.
+**Show one of your monitors on your TV, wirelessly, from Linux.**
 
-## Build and run
+Windows and Apple computers can mirror a screen to a TV with a couple of clicks. On Linux this is
+still hard. ScreenCopy is a small desktop program that does it over Miracast (Wi-Fi Display), which
+many smart TVs already support, without cables or extra hardware on the TV.
 
-Requirements: Rust (stable), GTK 4.14 or newer and libadwaita 1.5 or newer, including their
-development packages. On Linux Mint 22 or Ubuntu 24.04:
+![The ScreenCopy window](docs/screenshot.png)
+
+## What it solves
+
+- **Share just one monitor.** With several monitors, you choose which one the TV shows. The others
+  stay private.
+- **Keep your firewall on.** On the test computer, the existing Linux tool, GNOME Network Displays,
+  connected only with ufw turned off, and it showed all three monitors. ScreenCopy opens only what
+  the TV needs, only on the direct connection to the TV, and only during the session.
+- **Sound goes to the TV too,** and returns to your speakers or headphones when you stop.
+- **Nothing to set up on the TV side.** Turn on Screen Mirroring on the TV, click Search, click Share.
+
+## Tested on
+
+> **ScreenCopy has been tested only on the setup below.** It may work elsewhere, but nobody has
+> checked yet. Reports from other systems and TVs are very welcome.
+
+| | |
+|---|---|
+| Operating system | Linux Mint 22 (based on Ubuntu 24.04) |
+| Desktop | Cinnamon on X11 |
+| Graphics | NVIDIA, with three monitors |
+| TV | Samsung AU7172 (75") |
+
+## Status and limitations
+
+Early development. Picture and sound work on the setup above.
+
+- **X11 only.** Wayland sessions are not supported.
+- **Mirrors an existing monitor.** It cannot create a virtual extra screen for the TV.
+- **The Wi-Fi card must support Wi-Fi Direct (P2P),** which you can check with `iw list`.
+  NetworkManager must manage the card.
+- **If the program crashes while sharing,** the computer has no sound until you start ScreenCopy
+  again, which restores the settings.
+- **Not yet confirmed on a real TV:** sound staying in sync with the picture, sound returning after
+  Stop, recovery after a crash, and closing the window while sharing. The test recording feature has
+  not been tried from the window either.
+
+## Install
+
+There are no ready-made downloads yet, so you build the package yourself. On Linux Mint 22 or
+Ubuntu 24.04, install [Rust](https://rustup.rs) (stable) and the build requirements:
 
     sudo apt install build-essential libgtk-4-dev libadwaita-1-dev \
         libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
         gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-        gstreamer1.0-plugins-ugly
+        gstreamer1.0-plugins-ugly gstreamer1.0-libav
 
-Run:
+Then build and install the package. Building needs no root privileges:
 
-    cargo run
+    packaging/build-deb.sh
+    sudo apt install ./target/debian/screencopy_*.deb
 
-Logging goes to stderr and is controlled by `RUST_LOG`, for example `RUST_LOG=debug cargo run`.
+ScreenCopy now appears in the applications menu. To remove it: `sudo apt remove screencopy`.
+
+## How to use it
+
+1. Turn on Screen Mirroring on the TV.
+2. Start ScreenCopy and choose a monitor.
+3. Click **Search**, then **Share** next to your TV. Enter your password when asked, and accept the
+   request on the TV if it asks.
+4. A bar at the top of the window shows that sharing is active. Click **Stop** to end it.
+
+## Privacy and security
+
+- **No telemetry, and no network connections** other than the one to your TV.
+- **The screen is captured only after you click Share,** and a visible bar with a Stop button stays
+  up for the whole session.
+- **The program itself never runs as root.** A small separate helper, started through polkit, allows
+  incoming TCP 7236 (RTSP) and UDP 67 (DHCP), only on the Wi-Fi Direct interface. It removes the
+  rules when ScreenCopy ends for any reason, including a crash. The rules are not saved, so a reboot
+  clears them too. The firewall is never turned off.
+- **Everything received from the TV is treated as untrusted:** sizes are limited, and malformed data
+  ends the session rather than crashing the program.
+
+## Development
+
+Run from the source tree:
+
+    RUST_LOG=debug cargo run
+
 To rule out an encoder problem, force one with `SCREENCOPY_ENCODER=x264enc` or
 `SCREENCOPY_ENCODER=nvcudah264enc`.
 
-## Firewall helper
-
-Mirroring needs the TV to reach this computer, which a firewall blocks. ScreenCopy never runs as
-root and never disables the firewall. A small helper, started through polkit, allows only TCP 7236
-(RTSP) and UDP 67 (DHCP), only on the Wi-Fi Direct interface, and only during a session. The helper
-removes the rules when ScreenCopy ends for any reason, including a crash. The rules are not
-persistent, so a reboot also clears them.
-
-Install the helper and its policy:
+Sharing needs the firewall helper. The package installs it. Without the package, install it by hand:
 
     cargo build --release --bin screencopy-firewall-helper
     sudo install -D -m 755 -o root -g root target/release/screencopy-firewall-helper \
         /usr/libexec/screencopy/screencopy-firewall-helper
-    sudo install -m 644 -o root -g root data/io.github.sinek.ScreenCopy.policy \
-        /usr/share/polkit-1/actions/io.github.sinek.ScreenCopy.policy
+    sudo install -m 644 -o root -g root data/io.github.sinkec.ScreenCopy.policy \
+        /usr/share/polkit-1/actions/io.github.sinkec.ScreenCopy.policy
 
-With firewalld, also install its zone:
+With firewalld, also install its zone. This path has not been tested on a real firewalld:
 
     sudo install -m 644 -o root -g root data/screencopy.firewalld.xml \
         /usr/lib/firewalld/zones/screencopy.xml
     sudo firewall-cmd --reload
 
-## Checks
+Checks:
 
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
@@ -59,4 +120,5 @@ Dependency checks use two extra tools:
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+Copyright © 2026 Matej Jazbinšek. Free software under the GNU General Public License, version 3 or
+later. It comes with absolutely no warranty. See [LICENSE](LICENSE).

@@ -64,9 +64,20 @@ pub struct StreamTarget {
     pub with_audio: bool,
 }
 
+/// What the TV hears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sound {
+    /// The computer's sound.
+    System,
+    /// Silence, because the computer's sound could not be captured.
+    Silent,
+    /// No audio at all, because the TV lacks a format this program can send.
+    Absent,
+}
+
 /// Sends the media. Separate from the protocol so that it can be tested alone.
 pub trait MediaStream {
-    fn start(&mut self, target: StreamTarget) -> Result<(), String>;
+    fn start(&mut self, target: StreamTarget) -> Result<Sound, String>;
     /// A failure that happened since the last call.
     fn poll_failure(&mut self) -> Option<String>;
 }
@@ -74,7 +85,7 @@ pub trait MediaStream {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionEvent {
     Negotiating,
-    Streaming(VideoMode),
+    Streaming(VideoMode, Sound),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -428,10 +439,10 @@ impl<M: MediaStream> Session<'_, M> {
             with_audio: self.with_audio,
         };
         info!(?target, "starting to send video");
-        self.media.start(target).map_err(SessionError::Stream)?;
+        let sound = self.media.start(target).map_err(SessionError::Stream)?;
         self.streaming = true;
         self.last_keepalive = Instant::now();
-        on_event(SessionEvent::Streaming(mode));
+        on_event(SessionEvent::Streaming(mode, sound));
         Ok(())
     }
 
@@ -503,9 +514,9 @@ mod tests {
     }
 
     impl MediaStream for FakeMedia {
-        fn start(&mut self, target: StreamTarget) -> Result<(), String> {
+        fn start(&mut self, target: StreamTarget) -> Result<Sound, String> {
             self.started.push(target);
-            self.start_failure.clone().map_or(Ok(()), Err)
+            self.start_failure.clone().map_or(Ok(Sound::Absent), Err)
         }
 
         fn poll_failure(&mut self) -> Option<String> {
@@ -669,7 +680,7 @@ mod tests {
         assert_eq!(target.mode.height, 1080);
         assert!(target.with_audio);
         assert_eq!(outcome.media.started.len(), 1);
-        assert!(matches!(outcome.events[1], SessionEvent::Streaming(_)));
+        assert!(matches!(outcome.events[1], SessionEvent::Streaming(..)));
     }
 
     #[test]

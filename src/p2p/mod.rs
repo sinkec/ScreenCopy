@@ -9,6 +9,7 @@ pub mod wfd_ie;
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use gtk::glib;
@@ -54,6 +55,8 @@ pub enum P2pError {
     Timeout,
     #[error("the connection to the TV failed")]
     ConnectionFailed,
+    #[error("the connection was cancelled")]
+    Cancelled,
     #[error("the connection has no usable {0}")]
     MissingNetworkData(&'static str),
 }
@@ -160,8 +163,9 @@ impl P2pClient {
     }
 
     /// Connects to `peer` and waits for the network to be ready. The TV usually
-    /// asks for confirmation first, so this can take up to a minute.
-    pub async fn connect(&self, peer: &Peer) -> Result<P2pLink, P2pError> {
+    /// asks for confirmation first, so this can take up to a minute. Setting
+    /// `cancel` ends the attempt.
+    pub async fn connect(&self, peer: &Peer, cancel: &AtomicBool) -> Result<P2pLink, P2pError> {
         let settings = connection_settings(&peer.hw_address, glib::user_name().to_str());
         let options = HashMap::from([
             ("persist", Variant::from("volatile")),
@@ -186,7 +190,7 @@ impl P2pClient {
             .await?;
         info!(peer = %peer.hw_address, "connecting");
 
-        match self.wait_until_activated(&active).await {
+        match self.wait_until_activated(&active, cancel).await {
             Ok(()) => self.read_link(active).await,
             Err(error) => {
                 self.deactivate(&active).await;
@@ -195,11 +199,18 @@ impl P2pClient {
         }
     }
 
-    async fn wait_until_activated(&self, active: &OwnedObjectPath) -> Result<(), P2pError> {
+    async fn wait_until_activated(
+        &self,
+        active: &OwnedObjectPath,
+        cancel: &AtomicBool,
+    ) -> Result<(), P2pError> {
         let started = Instant::now();
         let connection = proxy(&self.connection, active.as_str(), NM_ACTIVE).await?;
         let mut last_state = None;
         while started.elapsed() < CONNECT_TIMEOUT {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(P2pError::Cancelled);
+            }
             // The object disappears when a failed connection is cleaned up.
             let state: u32 = connection
                 .get_property("State")

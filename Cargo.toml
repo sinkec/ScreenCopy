@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 default-run = "screencopy"
 license = "GPL-3.0-or-later"
+authors = ["Matej Jazbinšek"]
+repository = "https://github.com/sinkec/ScreenCopy"
 description = "Clone one monitor to a TV over Miracast"
 
 [dependencies]
