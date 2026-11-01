@@ -118,6 +118,12 @@ Confirmed by the user on the real TV: discovery, connection, firewall, picture w
 The Debian package is built by `packaging/build-deb.sh`. Not yet confirmed: sound and picture staying in sync, recovery after a
 crash, closing the window or Ctrl+C while sharing, the Record button. Author: Matej Jazbinšek, GitHub user `sinkec`.
 
+## Licensing
+
+`packaging/third-party-licenses.py` adds the license texts of all statically linked crates to the
+package, and fails the build if one is missing. Run `cargo deny check` and `cargo audit` after changing
+dependencies, and keep `deny.toml` compatible with GPL-3.0-or-later.
+
 ## Open questions
 
 - Real fuzz targets (`cargo-fuzz`) need a nightly toolchain, postponed: the user is not familiar with

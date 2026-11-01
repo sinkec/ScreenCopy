@@ -122,3 +122,24 @@ Dependency checks use two extra tools:
 
 Copyright © 2026 Matej Jazbinšek. Free software under the GNU General Public License, version 3 or
 later. It comes with absolutely no warranty. See [LICENSE](LICENSE).
+
+The libraries compiled into the program are under MIT, Apache-2.0 and similar licenses, all compatible
+with the GPL. The package includes their full texts in
+`/usr/share/doc/screencopy/THIRD-PARTY-LICENSES`. GTK, libadwaita, GStreamer and its plugins, and the
+other programs ScreenCopy uses are installed separately, under their own licenses.
+
+ScreenCopy sends H.264 video and AAC audio, using the encoders installed on your system. These formats
+may be covered by patents in some countries. It is your responsibility to check this if it applies to
+your use.
+
+## Acknowledgements
+
+[GNOME Network Displays](https://gitlab.gnome.org/GNOME/gnome-network-displays) (GPL-3.0-or-later) was
+a valuable reference for how real TVs expect a Miracast source to behave.
+
+## Trademarks
+
+Miracast and Wi-Fi Direct are trademarks of the Wi-Fi Alliance. Samsung is a trademark of Samsung
+Electronics. ScreenCopy is an independent project, is not certified by the Wi-Fi Alliance, and is not
+affiliated with or endorsed by any of these companies. The names are used only to describe what the
+program works with.

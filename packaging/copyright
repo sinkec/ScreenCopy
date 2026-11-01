@@ -16,3 +16,6 @@ License: GPL-3+
  .
  On Debian systems, the complete text of the license is in
  /usr/share/common-licenses/GPL-3.
+
+Comment: Libraries compiled into the program keep their own licenses, listed
+ with their full texts in /usr/share/doc/screencopy/THIRD-PARTY-LICENSES.

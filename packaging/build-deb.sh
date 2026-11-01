@@ -23,6 +23,8 @@ for icon in $(cd data/icons && find hicolor -type f); do
 done
 install -D -m 644 README.md "$ROOT/usr/share/doc/screencopy/README.md"
 install -D -m 644 packaging/copyright "$ROOT/usr/share/doc/screencopy/copyright"
+packaging/third-party-licenses.py "$ROOT/usr/share/doc/screencopy/THIRD-PARTY-LICENSES"
+chmod 644 "$ROOT/usr/share/doc/screencopy/THIRD-PARTY-LICENSES"
 
 mkdir -p "$ROOT/DEBIAN"
 SIZE=$(du -sk "$ROOT" | cut -f1)
