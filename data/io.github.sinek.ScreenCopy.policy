@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>ScreenCopy</vendor>
+  <action id="io.github.sinek.ScreenCopy.firewall">
+    <description>Allow a TV to connect for screen mirroring</description>
+    <message>ScreenCopy needs to open the firewall on the Wi-Fi Direct connection while mirroring.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/screencopy/screencopy-firewall-helper</annotate>
+  </action>
+</policyconfig>

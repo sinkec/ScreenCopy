@@ -1,0 +1,27 @@
+[package]
+name = "screencopy"
+version = "0.1.0"
+edition = "2024"
+default-run = "screencopy"
+license = "GPL-3.0-or-later"
+description = "Clone one monitor to a TV over Miracast"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+x11rb = { version = "0.14", default-features = false, features = ["randr"] }
+zbus = { version = "6", default-features = false, features = ["default-rt", "proxy", "tracing"] }
+gst = { package = "gstreamer", version = "0.25", features = ["v1_24"] }
+gst_app = { package = "gstreamer-app", version = "0.25", features = ["v1_24"] }
+thiserror = "2"
+signal-hook = { version = "0.3", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
