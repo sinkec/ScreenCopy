@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
@@ -15,10 +15,12 @@ use crate::capture::monitor::Monitor;
 use crate::capture::recorder::Encoder;
 use crate::firewall;
 use crate::p2p::{P2pClient, P2pError, P2pLink, Peer, SEARCH_SECONDS};
+use crate::settings::{MAX_SOUND_DELAY_MS, MIN_SOUND_DELAY_MS, Settings};
 use crate::wfd::session::{SessionEvent, Sound};
 use crate::wfd::{self, ServeConfig, ServeEvent};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const SOUND_DELAY_STEP_MS: f64 = 10.0;
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SEARCH_DESCRIPTION: &str = "Turn on Screen Mirroring on the TV, then search for it.";
 
@@ -42,6 +44,7 @@ pub struct TvPanel {
     /// Lets a running search notice that it was replaced or cancelled.
     search_generation: Cell<u64>,
     stop: RefCell<Option<Arc<AtomicBool>>>,
+    sound_delay_ms: Arc<AtomicI32>,
     /// The window closes once the running session has cleaned up.
     close_requested: Cell<bool>,
 }
@@ -62,6 +65,11 @@ impl TvPanel {
         widgets.group.set_title("TV");
         widgets.group.set_description(Some(SEARCH_DESCRIPTION));
         widgets.group.set_header_suffix(Some(&search));
+        let settings = Settings::load();
+        let sound_delay_ms = Arc::new(AtomicI32::new(settings.sound_delay_ms));
+        widgets
+            .group
+            .add(&sound_delay_row(settings, Arc::clone(&sound_delay_ms)));
         widgets.group.add(&list);
 
         let this = Rc::new(Self {
@@ -73,6 +81,7 @@ impl TvPanel {
             shown_peers: RefCell::default(),
             search_generation: Cell::new(0),
             stop: RefCell::default(),
+            sound_delay_ms,
             close_requested: Cell::new(false),
         });
 
@@ -322,6 +331,7 @@ impl TvPanel {
             local_address: link.local_address,
             region: monitor.capture_region(),
             encoder,
+            sound_delay_ms: Arc::clone(&self.sound_delay_ms),
         };
         let (sender, events) = mpsc::channel();
         std::thread::Builder::new()
@@ -370,4 +380,24 @@ impl TvPanel {
         let toast = adw::Toast::builder().title(title).use_markup(false).build();
         self.widgets.toasts.add_toast(toast);
     }
+}
+
+/// Lets the user match the sound to the picture while watching. It stays
+/// available during a session, and takes effect at once.
+fn sound_delay_row(settings: Settings, delay: Arc<AtomicI32>) -> adw::SpinRow {
+    let row = adw::SpinRow::with_range(
+        f64::from(MIN_SOUND_DELAY_MS),
+        f64::from(MAX_SOUND_DELAY_MS),
+        SOUND_DELAY_STEP_MS,
+    );
+    row.set_title("Sound Delay (ms)");
+    row.set_subtitle("Raise it if sound comes before the picture, lower it if after.");
+    row.set_value(f64::from(settings.sound_delay_ms));
+    row.connect_value_notify(move |row| {
+        // The range above makes this conversion lossless.
+        let sound_delay_ms = row.value().round() as i32;
+        delay.store(sound_delay_ms, Ordering::Relaxed);
+        Settings { sound_delay_ms }.save();
+    });
+    row
 }

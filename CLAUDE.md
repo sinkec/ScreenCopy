@@ -112,11 +112,40 @@ restored on drop or on the next start after a crash. Tests use `FakePactl` and m
 user's real sound system. On this machine a leftover `gnome_network_displays` null sink from GNOME
 Network Displays was the default output; it is not ours, so it is never removed automatically.
 
-## Status (2026-11-01)
+## Status and next steps (2026-11-01)
 
-Confirmed by the user on the real TV: discovery, connection, firewall, picture with low delay, sound, sound returning after Stop.
-The Debian package is built by `packaging/build-deb.sh`. Not yet confirmed: sound and picture staying in sync, recovery after a
-crash, closing the window or Ctrl+C while sharing, the Record button. Author: Matej Jazbinšek, GitHub user `sinkec`.
+Author: Matej Jazbinšek, GitHub user `sinkec`, repository `sinkec/ScreenCopy` (public, branch `main`).
+At the end of 2026-11-01, the Sound Delay commit is local only and has not been pushed: push it only
+when the user asks. The installed `.deb` is older than this commit and has no Sound Delay row, so
+test with `RUST_LOG=debug cargo run` after closing the installed program, or rebuild the package.
+
+Confirmed by the user on the real TV (Samsung AU7172): discovery, connection, firewall with ufw on,
+picture with low delay, sound on the TV, sound returning to the headphones after Stop. Installing the
+package with the new app ID worked; polkit knows only the new action.
+
+The user continues testing on the next working day. Go through these in order, and after each result
+remove it from the "Not yet confirmed" list in `README.md`:
+
+1. Sharing after the app ID rename: menu icon, password window, picture and sound.
+2. Sound Delay row: how it looks, and changing it while sharing. It defaults to 0.
+3. Sync with a video that is in sync on the computer, such as "audio video sync test" on YouTube. A
+   film the user tried on 2026-11-01 was out of sync on the computer too, so it proved nothing about
+   ScreenCopy. If the sound is later than the picture by more than 100 ms, Sound Delay cannot fix it:
+   the stream's clock (PCR) would have to follow the audio instead.
+4. Closing the window while sharing: everything cleans up and the sound returns.
+5. Crash recovery: `pkill -9 -x screencopy` while sharing, then start again. Sound must return, with a
+   notice. Test this only after 4.
+6. Record button: record, Stop, play the file, and check that it shows only the chosen monitor.
+7. Stop while connecting, the About dialog, and the setup dialog when the helper is missing.
+
+After that, ask the user about: a downloadable `.deb` on GitHub Releases (recommended next), GitHub
+Actions for the checks, translations, real fuzz targets. A tray icon was left out on purpose: the
+banner already satisfies rule 5, and it would add dependencies. Flatpak was left out on purpose: the
+sandbox conflicts with pkexec, NetworkManager access and X11 capture.
+
+Known on the user's computer: new GTK programs log `Unable to connect to the accessibility bus` until
+the next login (see the project memory). A leftover `gnome_network_displays` null sink from GNOME
+Network Displays may exist; it is not ours, so it is never removed automatically.
 
 ## Licensing
 

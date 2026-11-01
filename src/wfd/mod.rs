@@ -6,7 +6,8 @@ pub mod session;
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
@@ -42,6 +43,7 @@ pub struct ServeConfig {
     pub local_address: Ipv4Addr,
     pub region: CaptureRegion,
     pub encoder: Encoder,
+    pub sound_delay_ms: Arc<AtomicI32>,
 }
 
 #[derive(Debug)]
@@ -79,7 +81,12 @@ fn serve_session(
     // One TV per session: nothing else may connect from here on.
     drop(listener);
 
-    let mut media = ScreenStream::new(config.region, config.encoder, config.local_address);
+    let mut media = ScreenStream::new(
+        config.region,
+        config.encoder,
+        config.local_address,
+        Arc::clone(&config.sound_delay_ms),
+    );
     let result = session::run(
         connection,
         config.local_address,

@@ -71,6 +71,10 @@ ScreenCopy now appears in the applications menu. To remove it: `sudo apt remove 
    request on the TV if it asks.
 4. A bar at the top of the window shows that sharing is active. Click **Stop** to end it.
 
+If the sound and the picture do not match, adjust **Sound Delay** while watching. Raise it if the
+sound comes first, lower it if the picture does. The value is saved for next time. It can delay the
+sound by up to 500 ms, but the picture by only 100 ms, to keep the stream valid for the TV.
+
 ## Privacy and security
 
 - **No telemetry, and no network connections** other than the one to your TV.

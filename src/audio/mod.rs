@@ -6,14 +6,15 @@
 //! next start can undo it if the program ends unexpectedly.
 
 use std::fs;
-use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use tracing::{debug, info, warn};
+
+use crate::settings::write_private_file;
 
 const SINK_NAME: &str = "screencopy_tv";
 /// The source GStreamer reads the virtual output's sound from.
@@ -112,28 +113,8 @@ fn state_path() -> Result<PathBuf, AudioError> {
     Ok(base.join("screencopy").join(STATE_FILE))
 }
 
-/// Replaces the file in one step, so that a crash cannot leave half of it.
 fn write_state(path: &Path, state: &RouteState) -> Result<(), AudioError> {
-    let directory = path.parent().ok_or(AudioError::NoStateDirectory)?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(directory)
-        .map_err(AudioError::State)?;
-    let temporary = path.with_extension("new");
-    let write = || -> io::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
-        file.write_all(state.format().as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)
-    };
-    write().map_err(AudioError::State)
+    write_private_file(path, state.format().as_bytes()).map_err(AudioError::State)
 }
 
 fn read_state(path: &Path) -> Option<RouteState> {
@@ -342,6 +323,7 @@ impl Drop for AudioRoute {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::os::unix::fs::PermissionsExt;
     use std::rc::Rc;
 
     use super::*;
