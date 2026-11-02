@@ -105,6 +105,9 @@ video and 0x1100 for audio, or the TV stays black.
 Packets are paced by timestamp (`sync=true`, 100 ms behind real time), found on the real TV to remove
 most stutter: measurements showed capture and encoding were steady, and the TV stuttered on uneven
 sending. Other causes were tested and excluded on the TV: home Wi-Fi on the PC or TV, key frame distance.
+The UDP send buffer is 2 MB, because a key frame (up to about 330 kB) overflowed the default: the system-wide
+`SndbufErrors` in `/proc/net/snmp` fell from about 0.7 per second to 0, and the picture improved. Check that
+counter first if stutter returns.
 The default stays 30 fps: on the real TV, 60 fps showed the ball's bounce more often but stuttered
 more. `SCREENCOPY_FRAME_RATE=60` still requests it; a choice in the window could be added later.
 
@@ -129,10 +132,9 @@ picture with low delay, sound on the TV, sound returning to the headphones after
 TV, and paced sending removes most stutter. Installing the
 package with the new app ID worked; polkit knows only the new action.
 
-The user continues testing on the next working day. Go through these in order, and after each result
+Sharing with home Wi-Fi connected is confirmed too. The user continues testing. Go through these in order, and after each result
 remove it from the "Not yet confirmed" list in `README.md`:
 
-1. Sharing after the app ID rename: menu icon, password window, picture and sound.
 2. Sound Delay row: how it looks, and changing it while sharing. It defaults to 0.
 3. Sync with a video that is in sync on the computer, such as "audio video sync test" on YouTube. A
    film the user tried on 2026-11-01 was out of sync on the computer too, so it proved nothing about

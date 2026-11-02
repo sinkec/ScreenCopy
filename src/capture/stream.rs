@@ -23,6 +23,10 @@ const BITRATE_VARIABLE: &str = "SCREENCOPY_BITRATE_KBIT";
 const PACING_VARIABLE: &str = "SCREENCOPY_PACING_MS";
 /// Chosen on a real TV: visibly the smoothest of the settings tried.
 const DEFAULT_PACING_MS: u32 = 100;
+/// A single key frame can exceed the default send buffer of about 200 kB, and
+/// packets that do not fit are lost before they are ever sent. The kernel
+/// limits this to `net.core.wmem_max`.
+const SEND_BUFFER_BYTES: u32 = 2 * 1024 * 1024;
 const CAPTURE_QUEUE: &str = "capture-queue";
 const SENDER: &str = "sender";
 const VIDEO_QUEUE: &str = "video-before-mux";
@@ -205,7 +209,7 @@ fn stream_description(
          mpegtsmux name=mux alignment=7 \
          ! rtpmp2tpay ssrc=1 timestamp-offset=0 seqnum-offset=0 perfect-rtptime=false \
          ! udpsink name={SENDER} host={address} port={port} bind-address={local_address} \
-         bind-port={local_port} {pacing}",
+         bind-port={local_port} buffer-size={SEND_BUFFER_BYTES} {pacing}",
         rate = mode.frame_rate,
         width = mode.width,
         height = mode.height,
@@ -594,6 +598,20 @@ mod tests {
             assert!(description.ends_with("bitrate=3000"), "{description}");
             gst::parse::launch(&description).unwrap();
         }
+    }
+
+    #[test]
+    fn the_sender_gets_a_buffer_larger_than_a_key_frame() {
+        gst::init().unwrap();
+        let description = stream_description(
+            TEST_SOURCE,
+            Encoder::software(),
+            LOCAL,
+            target(1028, false),
+            None,
+        );
+        assert!(description.contains("buffer-size=2097152"), "{description}");
+        gst::parse::launch(&description).unwrap();
     }
 
     #[test]
