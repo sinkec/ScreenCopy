@@ -6,6 +6,8 @@ use std::collections::HashMap;
 const MAX_PARAMETERS: usize = 64;
 const PROFILE_CONSTRAINED_BASELINE: u8 = 0x01;
 const NONE: &str = "none";
+/// Asks for a frame rate, to compare smoothness on a particular TV and network.
+const FRAME_RATE_VARIABLE: &str = "SCREENCOPY_FRAME_RATE";
 
 /// H.264 levels in the bit positions the specification gives them.
 const LEVEL_3_1: u8 = 0x01;
@@ -109,15 +111,30 @@ fn parse_video_formats(value: &str) -> Vec<H264Support> {
 
 /// The best format that the TV supports in Constrained Baseline, if any.
 pub fn choose_video_mode(video_formats: &str) -> Option<VideoMode> {
+    let preferred_rate = std::env::var(FRAME_RATE_VARIABLE)
+        .ok()
+        .and_then(|value| value.parse().ok());
+    choose_video_mode_at_rate(video_formats, preferred_rate)
+}
+
+/// Prefers `preferred_rate` where the TV offers it, then the usual order.
+fn choose_video_mode_at_rate(
+    video_formats: &str,
+    preferred_rate: Option<u32>,
+) -> Option<VideoMode> {
     let support: Vec<H264Support> = parse_video_formats(video_formats)
         .into_iter()
         .filter(|entry| entry.profile & PROFILE_CONSTRAINED_BASELINE != 0)
         .collect();
-    MODES.into_iter().find(|mode| {
+    let supported = |mode: &VideoMode| {
         support
             .iter()
             .any(|entry| entry.cea & mode.cea_bit != 0 && entry.level >= mode.level)
-    })
+    };
+    MODES
+        .into_iter()
+        .find(|mode| Some(mode.frame_rate) == preferred_rate && supported(mode))
+        .or_else(|| MODES.into_iter().find(|mode| supported(mode)))
 }
 
 /// Whether the TV lists AAC among its audio formats.
@@ -150,6 +167,8 @@ pub fn parse_transport_client_port(value: &str) -> Option<u16> {
 mod tests {
     use super::*;
 
+    const FORMATS_1080P30_ONLY: &str =
+        "00 00 01 04 00000080 00000000 00000000 00 0000 0000 00 none none";
     const TYPICAL_TV: &str = "00 00 02 04 000184ff 00000000 00000000 00 0000 0000 11 none none, \
                               01 04 000184ff 00000000 00000000 00 0000 0000 11 none none";
 
@@ -161,6 +180,23 @@ mod tests {
             (1920, 1080, 30)
         );
         assert_eq!(chosen.level_name(), "4");
+    }
+
+    #[test]
+    fn prefers_the_requested_frame_rate_on_a_real_tv() {
+        // As reported by a Samsung AU7172 TV.
+        let formats = "40 00 01 10 000001e3 0f3fffff 00000fff 00 0000 00c8 01 none none";
+        let usual = choose_video_mode_at_rate(formats, None).unwrap();
+        assert_eq!((usual.height, usual.frame_rate), (1080, 30));
+        let smooth = choose_video_mode_at_rate(formats, Some(60)).unwrap();
+        assert_eq!((smooth.height, smooth.frame_rate), (1080, 60));
+        assert_eq!(smooth.level_name(), "4.2");
+    }
+
+    #[test]
+    fn unavailable_frame_rate_falls_back_to_the_usual_order() {
+        let chosen = choose_video_mode_at_rate(FORMATS_1080P30_ONLY, Some(60)).unwrap();
+        assert_eq!((chosen.height, chosen.frame_rate), (1080, 30));
     }
 
     #[test]

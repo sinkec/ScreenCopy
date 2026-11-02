@@ -209,6 +209,7 @@ impl P2pClient {
         let mut last_state = None;
         while started.elapsed() < CONNECT_TIMEOUT {
             if cancel.load(Ordering::Relaxed) {
+                info!("connecting was cancelled");
                 return Err(P2pError::Cancelled);
             }
             // The object disappears when a failed connection is cleaned up.

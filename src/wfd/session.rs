@@ -14,6 +14,7 @@ use super::params::{
     parse_transport_client_port, supports_aac,
 };
 use super::rtsp::{self, Message, ParseError, StartLine};
+use crate::capture::stream_stats::StreamStats;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -25,6 +26,8 @@ const READ_CHUNK: usize = 4096;
 /// Unparsed data is limited by the parser, plus one read that may follow it.
 const MAX_BUFFERED: usize = 32 * 1024;
 
+/// Leaves out the audio, to find out whether a TV stutters while following it.
+const NO_AUDIO_VARIABLE: &str = "SCREENCOPY_NO_AUDIO";
 const STATUS_OK: u16 = 200;
 const STATUS_NOT_SUPPORTED: u16 = 551;
 const SERVER_RTP_PORT: u16 = 19000;
@@ -78,6 +81,10 @@ pub enum Sound {
 /// Sends the media. Separate from the protocol so that it can be tested alone.
 pub trait MediaStream {
     fn start(&mut self, target: StreamTarget) -> Result<Sound, String>;
+    /// Measurements, whenever a measuring period has ended.
+    fn poll_stats(&mut self) -> Option<StreamStats> {
+        None
+    }
     /// A failure that happened since the last call.
     fn poll_failure(&mut self) -> Option<String>;
 }
@@ -86,6 +93,7 @@ pub trait MediaStream {
 pub enum SessionEvent {
     Negotiating,
     Streaming(VideoMode, Sound),
+    Stats(StreamStats),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +185,10 @@ pub fn run(
             return Err(SessionError::Timeout);
         }
         session.keep_alive()?;
+        if let Some(stats) = session.media.poll_stats() {
+            info!(?stats, "stream measurements");
+            on_event(SessionEvent::Stats(stats));
+        }
         if let Some(failure) = session.media.poll_failure() {
             return Err(SessionError::Stream(failure));
         }
@@ -325,7 +337,8 @@ impl<M: MediaStream> Session<'_, M> {
             .ok_or(SessionError::Missing("its video port"))?;
         self.with_audio = parameters
             .get("wfd_audio_codecs")
-            .is_some_and(|value| supports_aac(value));
+            .is_some_and(|value| supports_aac(value))
+            && std::env::var_os(NO_AUDIO_VARIABLE).is_none();
         self.mode = Some(mode);
         self.rtp_port = Some(port);
 

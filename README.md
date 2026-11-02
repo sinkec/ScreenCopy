@@ -94,7 +94,11 @@ Run from the source tree:
     RUST_LOG=debug cargo run
 
 To rule out an encoder problem, force one with `SCREENCOPY_ENCODER=x264enc` or
-`SCREENCOPY_ENCODER=nvcudah264enc`.
+`SCREENCOPY_ENCODER=nvcudah264enc`. To compare smoothness, request `SCREENCOPY_FRAME_RATE=60`, which
+applies if the TV supports it. To change how often key frames are sent, set
+`SCREENCOPY_KEY_FRAME_DISTANCE` to a number of frames. To compare other settings, use
+`SCREENCOPY_BITRATE_KBIT` with a bitrate, `SCREENCOPY_PACING_MS` to change how far behind real time packets
+are sent evenly (100 by default, 0 turns it off), or `SCREENCOPY_NO_AUDIO=1` to send video only.
 
 Sharing needs the firewall helper. The package installs it. Without the package, install it by hand:
 

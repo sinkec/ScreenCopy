@@ -102,6 +102,11 @@ The UI's Share button does, in order: `firewall::authorize` (the password prompt
 kept waiting), P2P connect, then `wfd::serve` on its own thread (firewall open, listen on the P2P
 address only, one accepted connection, M1-M7, capture only after PLAY). Packet IDs must be 0x1011 for
 video and 0x1100 for audio, or the TV stays black.
+Packets are paced by timestamp (`sync=true`, 100 ms behind real time), found on the real TV to remove
+most stutter: measurements showed capture and encoding were steady, and the TV stuttered on uneven
+sending. Other causes were tested and excluded on the TV: home Wi-Fi on the PC or TV, key frame distance.
+The default stays 30 fps: on the real TV, 60 fps showed the ball's bounce more often but stuttered
+more. `SCREENCOPY_FRAME_RATE=60` still requests it; a choice in the window could be added later.
 
 ## Audio design
 

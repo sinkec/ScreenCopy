@@ -367,6 +367,18 @@ impl TvPanel {
                         }
                     }
                 }
+                Ok(ServeEvent::Session(SessionEvent::Stats(stats))) => {
+                    self.describe(&format!(
+                        "Measured: {} frames captured, {} sent per second. \
+                         Longest pause {} ms, at {:.1} Mbit/s.",
+                        stats.captured_fps,
+                        stats.encoded_fps,
+                        stats
+                            .longest_capture_gap_ms
+                            .max(stats.longest_encoded_gap_ms),
+                        stats.sent_kbit_per_second as f64 / 1000.0,
+                    ));
+                }
                 Ok(ServeEvent::Ended(result)) => return result,
                 Err(TryRecvError::Empty) => glib::timeout_future(EVENT_POLL_INTERVAL).await,
                 Err(TryRecvError::Disconnected) => {

@@ -3,12 +3,14 @@
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::Duration;
 
 use gst::prelude::*;
 use tracing::{debug, warn};
 
 use super::monitor::CaptureRegion;
 use super::recorder::{Encoder, screen_source};
+use super::stream_stats::{StreamMeter, StreamStats};
 use crate::audio::{AudioRoute, MONITOR_SOURCE};
 use crate::wfd::session::{MediaStream, Sound, StreamTarget};
 
@@ -16,7 +18,16 @@ use crate::wfd::session::{MediaStream, Sound, StreamTarget};
 /// a stream to carry audio.
 const SILENT_AUDIO_SOURCE: &str = "audiotestsrc is-live=true wave=silence";
 const AAC_ENCODER: &str = "avenc_aac";
+const KEY_FRAME_VARIABLE: &str = "SCREENCOPY_KEY_FRAME_DISTANCE";
+const BITRATE_VARIABLE: &str = "SCREENCOPY_BITRATE_KBIT";
+const PACING_VARIABLE: &str = "SCREENCOPY_PACING_MS";
+/// Chosen on a real TV: visibly the smoothest of the settings tried.
+const DEFAULT_PACING_MS: u32 = 100;
+const CAPTURE_QUEUE: &str = "capture-queue";
+const SENDER: &str = "sender";
 const VIDEO_QUEUE: &str = "video-before-mux";
+/// Often enough to catch a stall, rarely enough to keep the log readable.
+const STATS_INTERVAL: Duration = Duration::from_secs(5);
 const AUDIO_QUEUE: &str = "audio-before-mux";
 
 pub struct ScreenStream {
@@ -29,6 +40,8 @@ pub struct ScreenStream {
     /// Can change at any moment, because the user adjusts it while watching.
     sound_delay_ms: Arc<AtomicI32>,
     applied_sound_delay_ms: Option<i32>,
+    meter: Option<StreamMeter>,
+    stats_interval: Duration,
 }
 
 impl ScreenStream {
@@ -58,6 +71,8 @@ impl ScreenStream {
             pipeline: None,
             sound_delay_ms: Arc::default(),
             applied_sound_delay_ms: None,
+            meter: None,
+            stats_interval: STATS_INTERVAL,
         }
     }
 
@@ -114,6 +129,36 @@ fn delay_offsets(delay_ms: i32) -> (i64, i64) {
     (offset.min(0).abs(), offset.max(0))
 }
 
+/// Asks for a distance between key frames, to find out whether they are what
+/// a TV stutters on.
+fn key_frame_distance() -> Option<u32> {
+    std::env::var(KEY_FRAME_VARIABLE).ok()?.parse().ok()
+}
+
+/// Asks for a bitrate in kbit/s, to find out whether the amount of data matters.
+fn bitrate_override() -> Option<u32> {
+    std::env::var(BITRATE_VARIABLE).ok()?.parse().ok()
+}
+
+/// How far behind real time packets are sent. Zero sends them as they come.
+fn pacing_delay_ms() -> u32 {
+    std::env::var(PACING_VARIABLE)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_PACING_MS)
+}
+
+/// A TV shows uneven packets as stutter, and the encoder's output comes in
+/// clumps, so packets leave by their timestamps. The delay gives late frames
+/// time to catch up.
+fn pacing_options(delay_ms: u32) -> String {
+    if delay_ms == 0 {
+        "sync=false".to_owned()
+    } else {
+        format!("sync=true ts-offset={}", u64::from(delay_ms) * 1_000_000)
+    }
+}
+
 fn system_audio_source() -> String {
     format!(
         "pulsesrc device={MONITOR_SOURCE} client-name=ScreenCopy buffer-time=100000 \
@@ -151,20 +196,22 @@ fn stream_description(
     } = target;
     let audio = audio_source.map(audio_description).unwrap_or_default();
     format!(
-        "{source} ! video/x-raw,framerate={rate}/1 ! queue leaky=downstream max-size-buffers=2 \
+        "{source} ! video/x-raw,framerate={rate}/1 ! queue name={CAPTURE_QUEUE} leaky=downstream \
+         max-size-buffers=2 \
          ! videoscale add-borders=true ! videoconvert \
          ! video/x-raw,format=NV12,width={width},height={height},pixel-aspect-ratio=1/1 \
          ! {encoder} ! video/x-h264,profile=constrained-baseline,level=(string){level} \
          ! h264parse config-interval=-1 ! queue name={VIDEO_QUEUE} ! mux.sink_4113 {audio} \
          mpegtsmux name=mux alignment=7 \
          ! rtpmp2tpay ssrc=1 timestamp-offset=0 seqnum-offset=0 perfect-rtptime=false \
-         ! udpsink host={address} port={port} bind-address={local_address} \
-         bind-port={local_port} sync=false",
+         ! udpsink name={SENDER} host={address} port={port} bind-address={local_address} \
+         bind-port={local_port} {pacing}",
         rate = mode.frame_rate,
         width = mode.width,
         height = mode.height,
-        encoder = encoder.description(),
+        encoder = encoder.description_with(key_frame_distance(), bitrate_override()),
         level = mode.level_name(),
+        pacing = pacing_options(pacing_delay_ms()),
     )
 }
 
@@ -181,6 +228,15 @@ impl MediaStream for ScreenStream {
         );
         debug!(%description, "building stream pipeline");
         let pipeline = gst::parse::launch(&description).map_err(|error| error.to_string())?;
+        if let Some(bin) = pipeline.downcast_ref::<gst::Bin>() {
+            self.meter = Some(StreamMeter::attach(
+                bin,
+                CAPTURE_QUEUE,
+                VIDEO_QUEUE,
+                SENDER,
+                self.stats_interval,
+            ));
+        }
         pipeline
             .set_state(gst::State::Playing)
             .map_err(|error| error.to_string())?;
@@ -191,6 +247,10 @@ impl MediaStream for ScreenStream {
             (Some(_), None) => Sound::Silent,
             (Some(_), Some(_)) => Sound::System,
         })
+    }
+
+    fn poll_stats(&mut self) -> Option<StreamStats> {
+        self.meter.as_mut()?.poll()
     }
 
     fn poll_failure(&mut self) -> Option<String> {
@@ -478,6 +538,107 @@ mod tests {
             "baseline {baseline} ms, picture delayed {earlier} ms"
         );
         assert!(margin > 0, "sound after the clock by {margin} ms");
+    }
+
+    /// Counts key frames in `frames` encoded frames, with the given distance.
+    fn count_key_frames(encoder: Encoder, distance: u32, frames: u32) -> usize {
+        gst::init().unwrap();
+        let description = format!(
+            "videotestsrc num-buffers={frames} pattern=ball \
+             ! video/x-raw,format=NV12,width=640,height=360,framerate=30/1 \
+             ! {} ! video/x-h264,profile=constrained-baseline \
+             ! h264parse ! appsink name=out sync=false",
+            encoder.description_with(Some(distance), None),
+        );
+        let pipeline = gst::parse::launch(&description)
+            .unwrap()
+            .downcast::<gst::Bin>()
+            .unwrap();
+        let sink = pipeline
+            .by_name("out")
+            .unwrap()
+            .downcast::<gst_app::AppSink>()
+            .unwrap();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        let mut key_frames = 0;
+        while let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_seconds(10)) {
+            let buffer = sample.buffer().unwrap();
+            if !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT) {
+                key_frames += 1;
+            }
+        }
+        pipeline.set_state(gst::State::Null).unwrap();
+        key_frames
+    }
+
+    #[test]
+    fn key_frame_distance_really_changes_the_stream() {
+        let encoder = Encoder::software();
+        assert!(count_key_frames(encoder, 30, 300) >= 9);
+        assert!(count_key_frames(encoder, 120, 300) <= 4);
+    }
+
+    #[test]
+    fn key_frame_distance_changes_the_detected_encoder_too() {
+        gst::init().unwrap();
+        let encoder = Encoder::detect().unwrap();
+        assert!(count_key_frames(encoder, 30, 300) >= 9);
+        assert!(count_key_frames(encoder, 120, 300) <= 4);
+    }
+
+    #[test]
+    fn bitrate_override_is_a_valid_setting_for_every_encoder() {
+        gst::init().unwrap();
+        for encoder in [Encoder::software(), Encoder::detect().unwrap()] {
+            let description = encoder.description_with(None, Some(3000));
+            assert!(description.ends_with("bitrate=3000"), "{description}");
+            gst::parse::launch(&description).unwrap();
+        }
+    }
+
+    #[test]
+    fn pacing_can_be_turned_off() {
+        assert_eq!(pacing_options(0), "sync=false");
+        assert_eq!(pacing_options(50), "sync=true ts-offset=50000000");
+    }
+
+    #[test]
+    fn pacing_options_are_valid_for_the_sender() {
+        gst::init().unwrap();
+        gst::parse::launch(&format!(
+            "fakesrc num-buffers=1 ! udpsink host=127.0.0.1 port=29320 {}",
+            pacing_options(50)
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn stats_report_every_stage_of_a_real_stream() {
+        gst::init().unwrap();
+        let _receiver = std::net::UdpSocket::bind((LOCAL, 29319)).unwrap();
+        let mut stream =
+            ScreenStream::with_source(TEST_SOURCE.to_owned(), Encoder::software(), LOCAL);
+        stream.stats_interval = Duration::from_secs(3);
+        assert_eq!(stream.poll_stats(), None);
+        stream.start(target(29319, false)).unwrap();
+
+        let started = std::time::Instant::now();
+        let stats = loop {
+            if let Some(stats) = stream.poll_stats() {
+                break stats;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "no stats arrived"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert!((20..=31).contains(&stats.captured_fps), "{stats:?}");
+        assert!(stats.to_encoder_fps > 0, "{stats:?}");
+        assert!(stats.encoded_fps > 0, "{stats:?}");
+        assert!(stats.sent_kbit_per_second > 0, "{stats:?}");
+        assert!(stats.longest_capture_gap_ms > 0, "{stats:?}");
+        assert_eq!(stream.poll_stats(), None, "must wait for the next period");
     }
 
     #[test]

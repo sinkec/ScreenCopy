@@ -31,6 +31,8 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Encoder {
     name: &'static str,
     description: &'static str,
+    /// The property that sets the distance between key frames.
+    key_frame_property: &'static str,
 }
 
 /// Forces one encoder by element name, to tell encoder problems from others.
@@ -40,11 +42,13 @@ const ENCODER_OVERRIDE_VARIABLE: &str = "SCREENCOPY_ENCODER";
 /// its presets are rejected by current NVIDIA drivers.
 const ENCODERS: [Encoder; 2] = [
     Encoder {
+        key_frame_property: "gop-size",
         name: "nvcudah264enc",
         description: "nvcudah264enc preset=p1 tune=ultra-low-latency rate-control=cbr \
                       bitrate=8000 gop-size=30 b-frames=0 aud=true",
     },
     Encoder {
+        key_frame_property: "key-int-max",
         name: "x264enc",
         description: "x264enc tune=zerolatency speed-preset=ultrafast bitrate=8000 \
                       key-int-max=30",
@@ -73,6 +77,19 @@ impl Encoder {
 
     pub fn description(&self) -> &'static str {
         self.description
+    }
+
+    /// The description, with changed settings if asked. A property given twice
+    /// takes the later value.
+    pub fn description_with(&self, key_frames: Option<u32>, bitrate_kbit: Option<u32>) -> String {
+        let mut description = self.description.to_owned();
+        if let Some(distance) = key_frames {
+            description.push_str(&format!(" {}={distance}", self.key_frame_property));
+        }
+        if let Some(bitrate) = bitrate_kbit {
+            description.push_str(&format!(" bitrate={bitrate}"));
+        }
+        description
     }
 
     pub fn name(&self) -> &'static str {
@@ -423,6 +440,7 @@ mod tests {
     fn missing_encoder_is_not_usable() {
         gst::init().unwrap();
         let encoder = Encoder {
+            key_frame_property: "unused",
             name: "missing",
             description: "this-element-does-not-exist",
         };

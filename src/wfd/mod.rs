@@ -31,7 +31,7 @@ pub enum ServeError {
     Firewall(#[from] FirewallError),
     #[error("cannot listen for the TV: {0}")]
     Listen(io::Error),
-    #[error("the TV did not connect in time")]
+    #[error("the TV did not connect in time, please try again")]
     AcceptTimeout,
     #[error(transparent)]
     Session(#[from] SessionError),
@@ -72,9 +72,7 @@ fn serve_session(
     let listener =
         TcpListener::bind((config.local_address, RTSP_PORT)).map_err(ServeError::Listen)?;
     info!(address = %config.local_address, port = RTSP_PORT, "waiting for the TV");
-    let Some((connection, peer_address)) =
-        accept_tv(&listener, stop).map_err(ServeError::Listen)?
-    else {
+    let Some((connection, peer_address)) = accept_tv(&listener, stop).map_err(accept_error)? else {
         return Ok(());
     };
     info!(%peer_address, "the TV connected");
@@ -146,6 +144,14 @@ fn accept_tv(
     }
 }
 
+fn accept_error(error: io::Error) -> ServeError {
+    if error.kind() == io::ErrorKind::TimedOut {
+        ServeError::AcceptTimeout
+    } else {
+        ServeError::Listen(error)
+    }
+}
+
 fn peer_ipv4(address: SocketAddr) -> Result<Ipv4Addr, io::Error> {
     match address.ip() {
         IpAddr::V4(address) => Ok(address),
@@ -166,6 +172,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(peer, Ipv4Addr::LOCALHOST);
+    }
+
+    #[test]
+    fn a_tv_that_never_connects_is_reported_as_such() {
+        let error = accept_error(io::Error::from(io::ErrorKind::TimedOut));
+        assert!(matches!(error, ServeError::AcceptTimeout), "{error}");
+        let error = accept_error(io::Error::from(io::ErrorKind::AddrInUse));
+        assert!(matches!(error, ServeError::Listen(_)), "{error}");
     }
 
     #[test]
