@@ -120,12 +120,13 @@ Network Displays was the default output; it is not ours, so it is never removed 
 ## Status and next steps (2026-11-01)
 
 Author: Matej Jazbinšek, GitHub user `sinkec`, repository `sinkec/ScreenCopy` (public, branch `main`).
-At the end of 2026-11-01, the Sound Delay commit is local only and has not been pushed: push it only
-when the user asks. The installed `.deb` is older than this commit and has no Sound Delay row, so
-test with `RUST_LOG=debug cargo run` after closing the installed program, or rebuild the package.
+Everything is pushed. A package built from the current commit is in `target/debian/`; check with `dpkg -l
+screencopy` and compare with `git log` whether the user has installed it before relying on what the
+installed program can do.
 
 Confirmed by the user on the real TV (Samsung AU7172): discovery, connection, firewall with ufw on,
-picture with low delay, sound on the TV, sound returning to the headphones after Stop. Installing the
+picture with low delay, sound on the TV, sound returning to the headphones after Stop. Sharing works with no home Wi-Fi on the PC or the
+TV, and paced sending removes most stutter. Installing the
 package with the new app ID worked; polkit knows only the new action.
 
 The user continues testing on the next working day. Go through these in order, and after each result
