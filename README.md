@@ -8,7 +8,9 @@ Windows and Apple computers can mirror a screen to a TV with a couple of clicks.
 still hard. ScreenCopy is a small desktop program that does it over Miracast (Wi-Fi Display), which
 many smart TVs already support, without cables or extra hardware on the TV.
 
-![The ScreenCopy window](docs/screenshot.png)
+![The ScreenCopy window: three monitors drawn in their real size and position, a TV ready to share with, and the picture and sound settings](docs/screenshot.png)
+
+*The monitor pictures here are placeholders. In the program they show your screens.*
 
 ## What it solves
 
@@ -42,9 +44,7 @@ Early development. Picture and sound work on the setup above.
   NetworkManager must manage the card.
 - **If the program crashes while sharing,** the computer has no sound until you start ScreenCopy
   again, which restores the settings.
-- **Not yet confirmed on a real TV:** sound staying in sync with the picture, recovery after a crash,
-  and closing the window while sharing. The test recording feature has not been tried from the window
-  either.
+- **Not yet confirmed:** recovery after a crash, and the test recording from the window.
 
 ## Install
 
@@ -63,6 +63,14 @@ Then build and install the package. Building needs no root privileges:
 
 ScreenCopy now appears in the applications menu. To remove it: `sudo apt remove screencopy`.
 
+## Settings
+
+- **Resolution and Frame Rate:** Recommended is best for most uses. The TV reports what it supports
+  only while connecting, so if it lacks your choice, ScreenCopy uses the closest format and tells you.
+- **Appearance** (in the menu, under Preferences): follow the system, or always light or dark.
+- **Keep Running in the Tray** (also under Preferences): closing the window leaves ScreenCopy in the tray, if the desktop has
+  one. Quit from the tray's menu or the window's menu. You can turn this off.
+
 ## How to use it
 
 1. Turn on Screen Mirroring on the TV.
@@ -71,6 +79,11 @@ ScreenCopy now appears in the applications menu. To remove it: `sudo apt remove 
    request on the TV if it asks.
 4. A bar at the top of the window shows that sharing is active. Click **Stop** to end it.
 
+**Only TVs that are waiting for Miracast appear,** so turn on Screen Mirroring first. The cast list in
+Chrome can show more devices because Google Cast is a different protocol: it finds devices through your
+home network, while Miracast finds them directly over Wi-Fi Direct. ScreenCopy works with Miracast only.
+If several TVs are found, the list scrolls and the window says how many there are.
+
 If the sound and the picture do not match, adjust **Sound Delay** while watching. Raise it if the
 sound comes first, lower it if the picture does. The value is saved for next time. It can delay the
 sound by up to 500 ms, but the picture by only 100 ms, to keep the stream valid for the TV.
@@ -78,8 +91,10 @@ sound by up to 500 ms, but the picture by only 100 ms, to keep the stream valid 
 ## Privacy and security
 
 - **No telemetry, and no network connections** other than the one to your TV.
-- **The screen is captured only after you click Share,** and a visible bar with a Stop button stays
-  up for the whole session.
+- **The screen is shared only after you click Share,** and a Stop button stays available for the
+  whole session, in the window and in the tray, whose icon changes while sharing.
+- **Monitor pictures** in the window are taken once when it opens and when you click Refresh, so that
+  you can recognize each monitor. They stay in memory, and are never saved or sent anywhere.
 - **The program itself never runs as root.** A small separate helper, started through polkit, allows
   incoming TCP 7236 (RTSP) and UDP 67 (DHCP), only on the Wi-Fi Direct interface. It removes the
   rules when ScreenCopy ends for any reason, including a crash. The rules are not saved, so a reboot
