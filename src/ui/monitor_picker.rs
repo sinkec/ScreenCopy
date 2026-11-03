@@ -11,19 +11,42 @@ use tracing::{debug, error};
 use crate::capture::monitor::{self, Monitor, MonitorError};
 use crate::capture::thumbnail::{self, Thumbnail};
 
+use super::section::Section;
+
 const PAGE_MONITORS: &str = "monitors";
 const PAGE_MESSAGE: &str = "message";
-const CANVAS_MAX_WIDTH: i32 = 800;
-const CANVAS_MAX_HEIGHT: i32 = 180;
+const CANVAS_MAX_WIDTH: i32 = 880;
+const CANVAS_MAX_HEIGHT: i32 = 258;
+const RECORDING_BAR_SPACING: i32 = 12;
+const RECORDING_BAR_MARGIN: i32 = 24;
+const CARD_PADDING: i32 = 12;
 const DISPLAY_MONITORS: &str = "monitors";
 const DISPLAY_PREVIEW: &str = "preview";
 const MIN_TILE_SIDE: i32 = 32;
+const CHECK_ICON_SIZE: i32 = 12;
 /// Keeps neighbouring monitors visually apart.
-const TILE_GAP: i32 = 4;
-const CSS: &str = ".monitor-tile { padding: 0; border-radius: 6px; } \
-    .monitor-tile picture { border-radius: 6px; } \
-    .monitor-tile:checked { outline: 3px solid @accent_color; outline-offset: 1px; } \
-    .monitor-name { margin: 6px; padding: 1px 6px; border-radius: 4px; }";
+const TILE_GAP: i32 = 6;
+/// The selection is drawn inside the tile, where nothing can cut it off or cover
+/// it. While the screen is captured, the monitor in use stays clear.
+const CSS: &str = "button.monitor-tile { padding: 0; border-radius: 8px; background: none; \
+        box-shadow: none; outline: none; min-width: 0; min-height: 0; filter: none; } \
+    .monitor-frame { border-radius: 8px; border: 1px solid alpha(currentColor, 0.2); } \
+    .monitor-tile:hover .monitor-frame { border: 2px solid alpha(@accent_color, 0.6); } \
+    .monitor-tile:focus-visible .monitor-frame { border: 2px solid @accent_color; } \
+    .monitor-tile:checked .monitor-frame { border: 3px solid @accent_color; } \
+    .tv-list { background: none; } \
+    .tv-list > row:selected { background: alpha(@accent_bg_color, 0.1); } \
+    .tv-list > row:selected:hover { background: alpha(@accent_bg_color, 0.15); } \
+    .tv-list > row:not(:last-child) { border-bottom: 1px solid @card_shade_color; } \
+    .monitor-preview { border-radius: 8px; } \
+    .monitor-name { margin: 8px; padding: 1px 6px; border-radius: 4px; } \
+    .monitor-check { margin: 8px; padding: 3px; border-radius: 99px; opacity: 0; \
+        background: @accent_bg_color; color: @accent_fg_color; } \
+    .monitor-tile:checked .monitor-check { opacity: 1; } \
+    .monitor-tile:disabled:not(:checked) { opacity: 0.45; } \
+    .monitor-tile:disabled:checked { opacity: 1; } \
+    .monitor-tile:disabled picture, .monitor-tile:disabled label, \
+        .monitor-tile:disabled image { filter: none; }";
 
 /// Where one monitor is drawn, in pixels of the picker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,14 +85,17 @@ fn layout_tiles(monitors: &[(u32, u32, u32, u32)], max_width: i32, max_height: i
 pub struct MonitorPicker {
     pub stack: gtk::Stack,
     /// The section with the monitors, for the top of the window.
-    pub section: adw::PreferencesGroup,
+    pub section: Section,
     /// What must not change while capturing.
     pub canvas: gtk::Fixed,
     /// Shows a recording's preview in the monitors' place, so that the window
     /// keeps its size.
     pub preview: gtk::Picture,
+    /// Says what is being recorded, on top of the preview.
+    pub recording_status: gtk::Label,
+    /// Ends the recording, on top of the preview.
+    pub recording_stop: gtk::Button,
     display: gtk::Stack,
-    group: adw::PreferencesGroup,
     message: adw::StatusPage,
     pub selected: Rc<RefCell<Option<Monitor>>>,
     /// Lets an older round of pictures notice that it was replaced.
@@ -81,21 +107,43 @@ impl MonitorPicker {
     pub fn new(content: &impl IsA<gtk::Widget>) -> Rc<Self> {
         let canvas = gtk::Fixed::builder()
             .halign(gtk::Align::Center)
-            .margin_top(6)
-            .margin_bottom(6)
+            .valign(gtk::Align::Center)
             .build();
         let preview = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Contain)
             .can_shrink(true)
+            .overflow(gtk::Overflow::Hidden)
+            .css_classes(["monitor-preview"])
+            .margin_top(CARD_PADDING)
+            .margin_bottom(CARD_PADDING)
+            .margin_start(CARD_PADDING)
+            .margin_end(CARD_PADDING)
             .build();
         let display = gtk::Stack::builder()
-            .height_request(CANVAS_MAX_HEIGHT + 12)
+            .height_request(CANVAS_MAX_HEIGHT + 2 * CARD_PADDING)
+            .css_classes(["card"])
             .build();
         display.add_named(&canvas, Some(DISPLAY_MONITORS));
-        display.add_named(&preview, Some(DISPLAY_PREVIEW));
+        let recording_status = gtk::Label::new(None);
+        let recording_stop = gtk::Button::builder()
+            .label("Stop")
+            .css_classes(["destructive-action"])
+            .build();
+        let recording_bar = gtk::Box::builder()
+            .spacing(RECORDING_BAR_SPACING)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::End)
+            .margin_bottom(RECORDING_BAR_MARGIN)
+            .css_classes(["osd", "toolbar"])
+            .build();
+        recording_bar.append(&recording_status);
+        recording_bar.append(&recording_stop);
+        let preview_page = gtk::Overlay::builder().child(&preview).build();
+        preview_page.add_overlay(&recording_bar);
+        display.add_named(&preview_page, Some(DISPLAY_PREVIEW));
 
-        let group = adw::PreferencesGroup::builder().title("Monitor").build();
-        group.add(&display);
+        let section = Section::new("Monitor");
+        section.set_content(&display);
 
         let message = adw::StatusPage::builder()
             .icon_name("video-display-symbolic")
@@ -107,11 +155,12 @@ impl MonitorPicker {
 
         Rc::new(Self {
             stack,
-            section: group.clone(),
+            section,
             canvas,
             preview,
+            recording_status,
+            recording_stop,
             display,
-            group,
             message,
             selected: Rc::default(),
             generation: Cell::new(0),
@@ -203,8 +252,21 @@ impl MonitorPicker {
             .valign(gtk::Align::End)
             .css_classes(["osd", "caption", "monitor-name"])
             .build();
+        let check = gtk::Image::builder()
+            .icon_name("object-select-symbolic")
+            .pixel_size(CHECK_ICON_SIZE)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .css_classes(["monitor-check"])
+            .build();
+        let frame = gtk::Box::builder()
+            .can_target(false)
+            .css_classes(["monitor-frame"])
+            .build();
         let overlay = gtk::Overlay::builder().child(&picture).build();
         overlay.add_overlay(&name);
+        overlay.add_overlay(&check);
+        overlay.add_overlay(&frame);
 
         let button = gtk::ToggleButton::builder()
             .child(&overlay)
@@ -212,12 +274,13 @@ impl MonitorPicker {
             .height_request(tile.height)
             .tooltip_text(details(&monitor))
             .css_classes(["monitor-tile"])
+            .overflow(gtk::Overflow::Hidden)
             .build();
         self.canvas
             .put(&button, f64::from(tile.x), f64::from(tile.y));
 
         let selected = Rc::clone(&self.selected);
-        let group = self.group.clone();
+        let section = self.section.clone();
         button.connect_toggled(move |button| {
             if button.is_active() {
                 debug!(
@@ -225,7 +288,7 @@ impl MonitorPicker {
                     region = %monitor.capture_region(),
                     "monitor selected"
                 );
-                group.set_description(Some(&glib::markup_escape_text(&details(&monitor))));
+                section.set_detail(&details(&monitor));
                 selected.replace(Some(monitor.clone()));
             }
         });

@@ -11,6 +11,7 @@ use tracing::{error, info};
 
 use super::monitor_picker::{self, MonitorPicker};
 use super::recording::{Recording, RecordingWidgets};
+use super::section::Section;
 use super::tray::{Tray, TrayCommand};
 use super::tv::{TvPanel, TvWidgets};
 use super::{APP_ID, about};
@@ -22,10 +23,8 @@ const TRAY_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// Everything fits without scrolling, also on a 1366 × 768 screen.
 const WINDOW_WIDTH: i32 = 970;
 const WINDOW_HEIGHT: i32 = 630;
-const CONTENT_MARGIN: i32 = 18;
-/// Keeps the selected monitor's details clear of a banner.
-const CONTENT_MARGIN_TOP: i32 = 24;
-const COLUMN_SPACING: i32 = 24;
+/// The one distance around and between the parts of the window.
+const SPACING: i32 = 18;
 const THEMES: [(&str, Theme); 3] = [
     ("System", Theme::System),
     ("Light", Theme::Light),
@@ -179,11 +178,11 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let settings = SettingsStore::load();
     let layout = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(COLUMN_SPACING)
-        .margin_top(CONTENT_MARGIN_TOP)
-        .margin_bottom(CONTENT_MARGIN)
-        .margin_start(CONTENT_MARGIN)
-        .margin_end(CONTENT_MARGIN)
+        .spacing(SPACING)
+        .margin_top(SPACING)
+        .margin_bottom(SPACING)
+        .margin_start(SPACING)
+        .margin_end(SPACING)
         .build();
     let picker = MonitorPicker::new(&layout);
     picker.refresh();
@@ -193,37 +192,35 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         .tooltip_text("Refresh Monitors and Pictures")
         .build();
 
+    picker.section.set_suffix(&refresh);
+
+    let main_items = gio::Menu::new();
+    main_items.append(Some("Test Recording…"), Some("win.record"));
+    main_items.append(Some("Preferences"), Some("win.preferences"));
+    main_items.append(Some("About MonitorBeam"), Some("win.about"));
+    let quit_item = gio::Menu::new();
+    quit_item.append(Some("Quit"), Some("app.quit"));
     let menu = gio::Menu::new();
-    menu.append(Some("Preferences"), Some("win.preferences"));
-    menu.append(Some("About MonitorBeam"), Some("win.about"));
-    menu.append(Some("Quit"), Some("app.quit"));
+    menu.append_section(None, &main_items);
+    menu.append_section(None, &quit_item);
     let menu_button = gtk::MenuButton::builder()
         .icon_name("open-menu-symbolic")
         .tooltip_text("Main Menu")
         .menu_model(&menu)
         .build();
+    app.set_accels_for_action("app.quit", &["<Control>q"]);
+    app.set_accels_for_action("win.preferences", &["<Control>comma"]);
+    app.set_accels_for_action("window.close", &["<Control>w"]);
 
+    // Says when the screen is being captured, wherever the rest of the window is.
+    let title = adw::WindowTitle::new(about::NAME, "");
     let header = adw::HeaderBar::new();
-    header.pack_start(&refresh);
+    header.set_title_widget(Some(&title));
     header.pack_end(&menu_button);
-
-    // Monitor names come from the X server, so they are not markup.
-    let banner = adw::Banner::builder().use_markup(false).build();
-
-    // The banners cover the top of the content, so that the window keeps its size.
-    let share_banner = adw::Banner::builder().use_markup(false).build();
-    let banners = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .valign(gtk::Align::Start)
-        .build();
-    banners.append(&banner);
-    banners.append(&share_banner);
-    let overlay = gtk::Overlay::builder().child(&picker.stack).build();
-    overlay.add_overlay(&banners);
 
     let content = adw::ToolbarView::new();
     content.add_top_bar(&header);
-    content.set_content(Some(&overlay));
+    content.set_content(Some(&picker.stack));
 
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&content));
@@ -308,37 +305,43 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
 
     // Sharing and recording exclude each other, and neither allows changing
     // the monitor while running.
-    let tv_group = adw::PreferencesGroup::new();
-    let picture_group = adw::PreferencesGroup::new();
-    let recording_group = adw::PreferencesGroup::new();
+    let tv_section = Section::new("TV");
+    let picture_section = Section::new("Picture and Sound");
+    let record_action = gio::SimpleAction::new("record", None);
+    window.add_action(&record_action);
     let monitor_controls: [gtk::Widget; 2] =
         [picker.canvas.clone().upcast(), refresh.clone().upcast()];
 
-    let mut locked_by_sharing = monitor_controls.to_vec();
-    locked_by_sharing.push(recording_group.clone().upcast());
     TvPanel::attach(
         TvWidgets {
-            group: tv_group.clone(),
-            picture_group: picture_group.clone(),
+            section: tv_section.clone(),
+            picture_section: picture_section.clone(),
             settings: settings.clone(),
-            on_sharing: Box::new(move |sharing| {
-                if let Some(tray) = &tray {
-                    tray.set_sharing(sharing);
-                }
-            }),
+            on_sharing: {
+                let record_action = record_action.clone();
+                Box::new(move |sharing| {
+                    record_action.set_enabled(!sharing);
+                    if let Some(tray) = &tray {
+                        tray.set_sharing(sharing);
+                    }
+                })
+            },
             window: window.clone(),
-            banner: share_banner,
+            title: title.clone(),
             toasts: toasts.clone(),
-            locked: locked_by_sharing,
+            locked: monitor_controls.to_vec(),
         },
         Rc::clone(&picker.selected),
     );
 
     let mut locked_by_recording = monitor_controls.to_vec();
-    locked_by_recording.push(tv_group.clone().upcast());
+    locked_by_recording.push(tv_section.root.clone().upcast());
+    locked_by_recording.push(picture_section.root.clone().upcast());
     Recording::attach(
         RecordingWidgets {
-            group: recording_group.clone(),
+            action: record_action,
+            status: picker.recording_status.clone(),
+            stop: picker.recording_stop.clone(),
             preview: picker.preview.clone(),
             show_preview: {
                 let picker = Rc::clone(&picker);
@@ -346,27 +349,19 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             },
             active: recording_active,
             window: window.clone(),
-            banner,
+            title,
             toasts,
             locked: locked_by_recording,
         },
         Rc::clone(&picker.selected),
     );
-    let left = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(COLUMN_SPACING)
-        .hexpand(true)
-        .build();
-    left.append(&tv_group);
-    left.append(&recording_group);
-    picture_group.set_hexpand(true);
     let columns = gtk::Box::builder()
-        .spacing(COLUMN_SPACING)
+        .spacing(SPACING)
         .homogeneous(true)
         .build();
-    columns.append(&left);
-    columns.append(&picture_group);
-    layout.append(&picker.section);
+    columns.append(&tv_section.root);
+    columns.append(&picture_section.root);
+    layout.append(&picker.section.root);
     layout.append(&columns);
 
     {

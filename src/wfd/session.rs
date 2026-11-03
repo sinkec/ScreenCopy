@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use super::params::{
     VideoMode, VideoPreference, choose_video_mode_for, parse_client_rtp_port, parse_parameters,
-    parse_transport_client_port, supports_aac,
+    parse_transport_client_port, supported_modes, supports_aac,
 };
 use super::rtsp::{self, Message, ParseError, StartLine};
 use crate::capture::stream_stats::StreamStats;
@@ -89,9 +89,11 @@ pub trait MediaStream {
     fn poll_failure(&mut self) -> Option<String>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     Negotiating,
+    /// What the TV can show, of the formats this program can send.
+    TvFormats(Vec<VideoMode>),
     Streaming(VideoMode, Sound),
     Stats(StreamStats),
 }
@@ -131,6 +133,8 @@ struct Session<'a, M: MediaStream> {
     sink_options_received: bool,
     preference: VideoPreference,
     mode: Option<VideoMode>,
+    /// The formats the TV just reported, until they are passed on.
+    reported_modes: Option<Vec<VideoMode>>,
     with_audio: bool,
     rtp_port: Option<u16>,
     streaming: bool,
@@ -164,6 +168,7 @@ pub fn run(
         sink_options_received: false,
         preference,
         mode: None,
+        reported_modes: None,
         with_audio: false,
         rtp_port: None,
         streaming: false,
@@ -197,6 +202,9 @@ pub fn run(
         }
         if let Some(message) = session.read_message()? {
             session.handle(message, on_event)?;
+        }
+        if let Some(modes) = session.reported_modes.take() {
+            on_event(SessionEvent::TvFormats(modes));
         }
     }
     Ok(())
@@ -332,6 +340,7 @@ impl<M: MediaStream> Session<'_, M> {
         let formats = parameters
             .get("wfd_video_formats")
             .ok_or(SessionError::Missing("its video formats"))?;
+        self.reported_modes = Some(supported_modes(formats));
         let mode =
             choose_video_mode_for(formats, self.preference).ok_or(SessionError::NoVideoFormat)?;
         info!(tv_formats = %formats, ?mode, "chose a video format");
@@ -705,7 +714,8 @@ mod tests {
         assert_eq!(target.mode.height, 1080);
         assert!(target.with_audio);
         assert_eq!(outcome.media.started.len(), 1);
-        assert!(matches!(outcome.events[1], SessionEvent::Streaming(..)));
+        assert!(matches!(outcome.events[1], SessionEvent::TvFormats(_)));
+        assert!(matches!(outcome.events[2], SessionEvent::Streaming(..)));
     }
 
     #[test]

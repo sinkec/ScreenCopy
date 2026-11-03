@@ -73,6 +73,19 @@ pub struct Peer {
     pub info: DeviceInfo,
 }
 
+#[cfg(test)]
+impl Peer {
+    pub(crate) fn for_test(hw_address: &str, name: &str, info: DeviceInfo) -> Self {
+        Self {
+            path: OwnedObjectPath::default(),
+            name: name.to_owned(),
+            hw_address: hw_address.to_owned(),
+            strength: 0,
+            info,
+        }
+    }
+}
+
 /// An established Wi-Fi Direct connection.
 #[derive(Debug)]
 pub struct P2pLink {
@@ -351,7 +364,7 @@ fn first_ipv4_address(addresses: &[HashMap<String, OwnedValue>]) -> Option<Ipv4A
     })
 }
 
-fn is_valid_hw_address(address: &str) -> bool {
+pub(crate) fn is_valid_hw_address(address: &str) -> bool {
     let groups: Vec<&str> = address.split(':').collect();
     groups.len() == 6
         && groups

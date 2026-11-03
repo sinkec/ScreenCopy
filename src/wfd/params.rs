@@ -146,22 +146,27 @@ pub fn choose_video_mode_for(
     closest_video_mode(video_formats, preference)
 }
 
-/// Prefers `preferred_rate` where the TV offers it, then the usual order.
-/// The usual order applies within each step: both wishes, then the size alone,
-/// then the rate alone, then whatever is best.
-fn closest_video_mode(video_formats: &str, preference: VideoPreference) -> Option<VideoMode> {
+/// The formats this program can send and the TV can show, in order of preference.
+pub fn supported_modes(video_formats: &str) -> Vec<VideoMode> {
     let support: Vec<H264Support> = parse_video_formats(video_formats)
         .into_iter()
         .filter(|entry| entry.profile & PROFILE_CONSTRAINED_BASELINE != 0)
         .collect();
-    let supported: Vec<VideoMode> = MODES
+    MODES
         .into_iter()
         .filter(|mode| {
             support
                 .iter()
                 .any(|entry| entry.cea & mode.cea_bit != 0 && entry.level >= mode.level)
         })
-        .collect();
+        .collect()
+}
+
+/// Prefers `preferred_rate` where the TV offers it, then the usual order.
+/// The usual order applies within each step: both wishes, then the size alone,
+/// then the rate alone, then whatever is best.
+fn closest_video_mode(video_formats: &str, preference: VideoPreference) -> Option<VideoMode> {
+    let supported = supported_modes(video_formats);
     let height_only = VideoPreference {
         frame_rate: None,
         ..preference
@@ -214,6 +219,14 @@ mod tests {
         "00 00 01 04 00000080 00000000 00000000 00 0000 0000 00 none none";
     const TYPICAL_TV: &str = "00 00 02 04 000184ff 00000000 00000000 00 0000 0000 11 none none, \
                               01 04 000184ff 00000000 00000000 00 0000 0000 11 none none";
+
+    #[test]
+    fn reports_what_the_tv_can_show_in_order_of_preference() {
+        let modes = supported_modes(FORMATS_1080P30_ONLY);
+        assert_eq!(modes.first().map(|mode| mode.height), Some(1080));
+        assert!(modes.iter().all(|mode| mode.frame_rate == 30));
+        assert!(supported_modes("damaged").is_empty());
+    }
 
     #[test]
     fn prefers_1080p30() {

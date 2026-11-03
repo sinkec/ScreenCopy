@@ -21,6 +21,8 @@ const PKEXEC: &str = "/usr/bin/pkexec";
 /// Fixed and root-owned: the polkit policy authorizes exactly this path.
 const HELPER_PATH: &str = "/usr/libexec/monitorbeam/monitorbeam-firewall-helper";
 const READY: &str = "ready";
+const UFW_CONFIG: &str = "/etc/ufw/ufw.conf";
+const FIREWALL_CMD: &str = "firewall-cmd";
 /// `pkexec` exit codes when authorization was dismissed or refused.
 const PKEXEC_DISMISSED: i32 = 126;
 const PKEXEC_NOT_AUTHORIZED: i32 = 127;
@@ -150,7 +152,34 @@ fn helper_failure(status: ExitStatus, child: &mut Child) -> FirewallError {
     })
 }
 
-/// Whether the helper has been installed, which sharing cannot do without.
+/// Whether a firewall that this program knows how to open is running. If not, no
+/// helper and no password are needed, unless the TV then fails to connect. Reading
+/// this needs no privileges. Runs a command: do not call on the GTK thread.
+pub fn is_active() -> bool {
+    let ufw = fs::read_to_string(UFW_CONFIG).is_ok_and(|text| ufw_is_enabled(&text));
+    ufw || firewalld_is_running()
+}
+
+fn ufw_is_enabled(config: &str) -> bool {
+    config.lines().any(|line| {
+        line.split_once('=').is_some_and(|(key, value)| {
+            key.trim() == "ENABLED" && value.trim().eq_ignore_ascii_case("yes")
+        })
+    })
+}
+
+/// A missing `firewall-cmd` simply means firewalld is not in use.
+fn firewalld_is_running() -> bool {
+    Command::new(FIREWALL_CMD)
+        .arg("--state")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Whether the helper has been installed, which opening the firewall needs.
 pub fn helper_installed() -> bool {
     Path::new(HELPER_PATH).exists()
 }
@@ -205,6 +234,15 @@ mod tests {
     use super::*;
 
     const SHELL: &str = "/bin/sh";
+
+    #[test]
+    fn reads_whether_ufw_is_enabled() {
+        assert!(ufw_is_enabled("# comment\nENABLED=yes\nLOGLEVEL=low\n"));
+        assert!(ufw_is_enabled("ENABLED = YES"));
+        for config in ["ENABLED=no", "#ENABLED=yes", "", "ENABLED", "OTHER=yes"] {
+            assert!(!ufw_is_enabled(config), "{config:?}");
+        }
+    }
 
     /// A stand-in for the helper, as a shell script.
     fn fake_helper(script: &str) -> Result<FirewallSession, FirewallError> {

@@ -3,6 +3,7 @@
 pub mod about;
 mod monitor_picker;
 mod recording;
+mod section;
 pub mod splash;
 mod tray;
 mod tv;

@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use tracing::warn;
 
+const SETTINGS_FILE: &str = "settings";
 const SOUND_DELAY_KEY: &str = "sound_delay_ms";
 const VIDEO_HEIGHT_KEY: &str = "video_height";
 const FRAME_RATE_KEY: &str = "frame_rate";
@@ -83,14 +84,14 @@ impl Default for Settings {
 impl Settings {
     /// Unreadable or damaged settings simply mean the defaults.
     pub fn load() -> Self {
-        config_path()
+        config_file(SETTINGS_FILE)
             .and_then(|path| fs::read_to_string(path).ok())
             .filter(|text| text.len() <= MAX_FILE_LENGTH)
             .map_or_else(Self::default, |text| Self::parse(&text))
     }
 
     pub fn save(&self) {
-        let Some(path) = config_path() else {
+        let Some(path) = config_file(SETTINGS_FILE) else {
             warn!("no directory for the settings");
             return;
         };
@@ -167,12 +168,13 @@ impl SettingsStore {
     }
 }
 
-fn config_path() -> Option<PathBuf> {
+/// Where this program keeps a configuration file of this name.
+pub(crate) fn config_file(name: &str) -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|value| Path::new(value).is_absolute())
         .map(PathBuf::from)
         .or_else(|| Some(Path::new(&std::env::var_os("HOME")?).join(".config")))?;
-    Some(base.join("monitorbeam").join("settings"))
+    Some(base.join("monitorbeam").join(name))
 }
 
 /// Replaces the file in one step, so that a crash cannot leave half of it. The

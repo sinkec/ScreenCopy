@@ -24,7 +24,13 @@ use session::{SessionError, SessionEvent};
 const RTSP_PORT: u16 = 7236;
 /// How long the TV may take to connect after the Wi-Fi Direct link is up.
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
+/// With no firewall known to be running, this long without the TV suggests one
+/// that this program cannot see, such as hand-written iptables rules.
+const ACCEPT_TIMEOUT_NOT_OPENED: Duration = Duration::from_secs(12);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The TV's connection and its address.
+type AcceptedTv = (TcpStream, Ipv4Addr);
 
 #[derive(Debug, Error)]
 pub enum ServeError {
@@ -46,16 +52,22 @@ pub struct ServeConfig {
     pub encoder: Encoder,
     pub sound_delay_ms: Arc<AtomicI32>,
     pub video_preference: VideoPreference,
+    /// Whether a running firewall needs opening for the TV.
+    pub open_firewall: bool,
 }
 
 #[derive(Debug)]
 pub enum ServeEvent {
     Session(SessionEvent),
+    /// The TV did not connect, so the firewall is being opened after all, which
+    /// asks for the administrator password.
+    OpeningFirewall,
     Ended(Result<(), String>),
 }
 
 /// Serves one session on the calling thread and reports through `events`. Sends
-/// `Ended` last. The firewall is open only for as long as this runs.
+/// `Ended` last. A firewall that needed opening is open only for as long as this
+/// runs.
 pub fn serve(config: &ServeConfig, stop: &AtomicBool, events: &Sender<ServeEvent>) {
     let result = serve_session(config, stop, events).map_err(|error| error.to_string());
     if events.send(ServeEvent::Ended(result)).is_err() {
@@ -68,13 +80,17 @@ fn serve_session(
     stop: &AtomicBool,
     events: &Sender<ServeEvent>,
 ) -> Result<(), ServeError> {
-    let _firewall = FirewallSession::open(&config.interface)?;
+    let opened = config
+        .open_firewall
+        .then(|| FirewallSession::open(&config.interface))
+        .transpose()?;
 
     // Only the Wi-Fi Direct address, never every interface.
     let listener =
         TcpListener::bind((config.local_address, RTSP_PORT)).map_err(ServeError::Listen)?;
     info!(address = %config.local_address, port = RTSP_PORT, "waiting for the TV");
-    let Some((connection, peer_address)) = accept_tv(&listener, stop).map_err(accept_error)? else {
+    let (_firewall, accepted) = accept_opening_firewall(&listener, config, opened, stop, events)?;
+    let Some((connection, peer_address)) = accepted else {
         return Ok(());
     };
     info!(%peer_address, "the TV connected");
@@ -104,6 +120,33 @@ fn serve_session(
     Ok(result?)
 }
 
+/// Waits for the TV. If the firewall was left closed and the TV does not come,
+/// opens it and waits again, because something may be blocking the TV after all.
+fn accept_opening_firewall(
+    listener: &TcpListener,
+    config: &ServeConfig,
+    opened: Option<FirewallSession>,
+    stop: &AtomicBool,
+    events: &Sender<ServeEvent>,
+) -> Result<(Option<FirewallSession>, Option<AcceptedTv>), ServeError> {
+    if opened.is_some() {
+        let accepted = accept_tv(listener, stop, ACCEPT_TIMEOUT).map_err(accept_error)?;
+        return Ok((opened, accepted));
+    }
+    match accept_tv(listener, stop, ACCEPT_TIMEOUT_NOT_OPENED) {
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+            info!("the TV did not connect, opening the firewall");
+            if events.send(ServeEvent::OpeningFirewall).is_err() {
+                debug!("nobody is listening to session events");
+            }
+            let firewall = FirewallSession::open(&config.interface)?;
+            let accepted = accept_tv(listener, stop, ACCEPT_TIMEOUT).map_err(accept_error)?;
+            Ok((Some(firewall), accepted))
+        }
+        accepted => Ok((None, accepted.map_err(accept_error)?)),
+    }
+}
+
 /// Shows whether video really left the computer, when a TV stays black.
 fn log_interface_traffic(interface: &str) {
     let read = |name: &str| {
@@ -124,7 +167,8 @@ fn log_interface_traffic(interface: &str) {
 fn accept_tv(
     listener: &TcpListener,
     stop: &AtomicBool,
-) -> Result<Option<(TcpStream, Ipv4Addr)>, io::Error> {
+    timeout: Duration,
+) -> Result<Option<AcceptedTv>, io::Error> {
     listener.set_nonblocking(true)?;
     let started = Instant::now();
     loop {
@@ -137,7 +181,7 @@ fn accept_tv(
                 return Ok(Some((connection, peer_ipv4(address)?)));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if started.elapsed() > ACCEPT_TIMEOUT {
+                if started.elapsed() > timeout {
                     return Err(io::Error::from(io::ErrorKind::TimedOut));
                 }
                 std::thread::sleep(ACCEPT_POLL_INTERVAL);
@@ -171,10 +215,17 @@ mod tests {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let _client = TcpStream::connect(address).unwrap();
-        let (_, peer) = accept_tv(&listener, &AtomicBool::new(false))
+        let (_, peer) = accept_tv(&listener, &AtomicBool::new(false), ACCEPT_TIMEOUT)
             .unwrap()
             .unwrap();
         assert_eq!(peer, Ipv4Addr::LOCALHOST);
+    }
+
+    #[test]
+    fn waiting_for_the_tv_ends_after_the_given_time() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let error = accept_tv(&listener, &AtomicBool::new(false), Duration::ZERO).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]
@@ -189,7 +240,7 @@ mod tests {
     fn accept_can_be_stopped() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         assert!(
-            accept_tv(&listener, &AtomicBool::new(true))
+            accept_tv(&listener, &AtomicBool::new(true), ACCEPT_TIMEOUT)
                 .unwrap()
                 .is_none()
         );

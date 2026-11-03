@@ -1,5 +1,5 @@
-//! Test recording of the selected monitor, with a preview and a visible
-//! indicator for as long as the screen is being captured.
+//! Test recording of the selected monitor, started from the window's menu, with
+//! a preview and a visible Stop for as long as the screen is being captured.
 
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -22,8 +22,10 @@ pub struct Recording {
     /// Widgets that must not change while capturing.
     locked: Vec<gtk::Widget>,
     active: Rc<Cell<bool>>,
-    banner: adw::Banner,
-    record: gtk::Button,
+    title: adw::WindowTitle,
+    action: gio::SimpleAction,
+    status: gtk::Label,
+    stop: gtk::Button,
     preview: gtk::Picture,
     show_preview: Box<dyn Fn(bool)>,
     toasts: adw::ToastOverlay,
@@ -32,39 +34,33 @@ pub struct Recording {
 
 /// The widgets `Recording` needs from the window that hosts it.
 pub struct RecordingWidgets {
-    pub group: adw::PreferencesGroup,
+    /// Starts a recording, from the window's menu.
+    pub action: gio::SimpleAction,
+    pub status: gtk::Label,
+    pub stop: gtk::Button,
     pub preview: gtk::Picture,
     /// Called with whether the preview should take the monitors' place.
     pub show_preview: Box<dyn Fn(bool)>,
     pub active: Rc<Cell<bool>>,
     pub window: adw::ApplicationWindow,
-    pub banner: adw::Banner,
+    /// The window's title, which says when the screen is being captured.
+    pub title: adw::WindowTitle,
     pub toasts: adw::ToastOverlay,
     pub locked: Vec<gtk::Widget>,
 }
 
 impl Recording {
-    /// Fills in the section and connects the controller to the window, which
-    /// keeps it alive.
+    /// Connects the controller to the window, which keeps it alive.
     pub fn attach(widgets: RecordingWidgets, selected: Rc<RefCell<Option<Monitor>>>) {
-        let record = gtk::Button::builder()
-            .label("Record…")
-            .valign(gtk::Align::Center)
-            .build();
-        let group = widgets.group;
-        group.set_title("Test Recording");
-        group.set_description(Some(
-            "Record the selected monitor to a video file, without a TV.",
-        ));
-        group.set_header_suffix(Some(&record));
-
         let this = Rc::new(Self {
             window: widgets.window,
             selected,
             locked: widgets.locked,
             active: widgets.active,
-            banner: widgets.banner,
-            record,
+            title: widgets.title,
+            action: widgets.action,
+            status: widgets.status,
+            stop: widgets.stop,
             preview: widgets.preview,
             show_preview: widgets.show_preview,
             toasts: widgets.toasts,
@@ -75,14 +71,14 @@ impl Recording {
 
     fn connect_signals(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
-        self.record.connect_clicked(move |_| {
+        self.action.connect_activate(move |_, _| {
             if let Some(this) = weak.upgrade() {
                 this.choose_file();
             }
         });
 
         let weak = Rc::downgrade(self);
-        self.banner.connect_button_clicked(move |_| {
+        self.stop.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
                 this.request_stop();
             }
@@ -160,8 +156,8 @@ impl Recording {
 
     fn request_stop(&self) {
         if let Some(recorder) = self.recorder.borrow().as_ref() {
-            self.banner.set_title("Finishing the recording…");
-            self.banner.set_button_label(None);
+            self.status.set_text("Finishing the recording…");
+            self.stop.set_sensitive(false);
             recorder.stop();
         }
     }
@@ -179,23 +175,24 @@ impl Recording {
 
     fn show_active(&self, monitor: &Monitor) {
         self.active.set(true);
-        self.banner
-            .set_title(&format!("Recording monitor {}", monitor.name()));
-        self.banner.set_button_label(Some("Stop"));
-        self.banner.set_revealed(true);
+        let status = format!("Recording monitor {}", monitor.name());
+        self.title.set_subtitle(&status);
+        self.status.set_text(&status);
+        self.stop.set_sensitive(true);
+        (self.show_preview)(true);
         self.set_controls_enabled(false);
     }
 
     fn show_idle(&self) {
         self.active.set(false);
-        self.banner.set_revealed(false);
+        self.title.set_subtitle("");
         self.preview.set_paintable(gdk::Paintable::NONE);
         (self.show_preview)(false);
         self.set_controls_enabled(true);
     }
 
     fn set_controls_enabled(&self, enabled: bool) {
-        self.record.set_sensitive(enabled);
+        self.action.set_enabled(enabled);
         for widget in &self.locked {
             widget.set_sensitive(enabled);
         }
@@ -225,7 +222,6 @@ impl Recording {
                 frame.stride,
             );
             self.preview.set_paintable(Some(&texture));
-            (self.show_preview)(true);
         }
         glib::ControlFlow::Continue
     }
