@@ -2,120 +2,162 @@
 
 <img src="data/icons/hicolor/128x128/apps/io.github.sinkec.MonitorBeam.png" align="right" alt="" width="96">
 
-**Show one of your monitors on your TV, wirelessly, from Linux.**
+**Wirelessly show one of your Linux monitors on a TV, with sound.**
 
-Windows and Apple computers can mirror a screen to a TV with a couple of clicks. On Linux this is
-still hard. MonitorBeam is a small desktop program that does it over Miracast (Wi-Fi Display), which
-many smart TVs already support, without cables or extra hardware on the TV.
+[![Latest release](https://img.shields.io/github/v/release/sinkec/MonitorBeam)](https://github.com/sinkec/MonitorBeam/releases/latest)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-![The MonitorBeam window: three monitors drawn in their real size and position, a TV ready to share with, and the picture and sound settings](docs/screenshot.png)
+MonitorBeam mirrors a single monitor to a smart TV over Miracast (Wi-Fi Display). Windows and macOS make
+screen mirroring a matter of a few clicks. MonitorBeam brings that experience to the Linux desktop, with no
+cables and no extra hardware.
 
-*The monitor pictures here are placeholders. In the program they show your screens.*
+![The MonitorBeam window, with three monitors drawn in their real size and position, a TV ready to share with, and the picture and sound settings](docs/screenshot.png)
 
-## What it solves
+*The monitor pictures above are placeholders. In the program, they show your screens.*
 
-- **Share just one monitor.** With several monitors, you choose which one the TV shows. The others
-  stay private.
-- **Keep your firewall on.** On the test computer, the existing Linux tool, GNOME Network Displays,
-  connected only with ufw turned off, and it showed all three monitors. MonitorBeam opens only what
-  the TV needs, only on the direct connection to the TV, and only during the session.
-- **Sound goes to the TV too,** and returns to your speakers or headphones when you stop.
-- **Nothing to set up on the TV side.** Turn on Screen Mirroring on the TV, click Search, click Share.
+## Features
+
+- **One monitor, not the whole desktop.** Pick a monitor from a picture of your real layout, including its size,
+  position and rotation. Your other monitors stay private.
+- **Your firewall stays on.** MonitorBeam opens only what the TV needs, only on the direct connection to the TV,
+  and only during the session.
+- **Sound on the TV.** System sound moves to the TV, and returns to your speakers or headphones when you stop.
+- **Finds your TV by itself.** Your last used TV waits at the top of the list, and MonitorBeam remembers which
+  formats each TV supports.
+- **Runs quietly in the tray.** The tray icon shows when sharing is active, and offers Stop.
+- **Private by design.** No telemetry, no accounts, and no network connections other than the one to your TV.
 
 ## Tested on
 
-> **MonitorBeam has been tested only on the setup below.** It may work elsewhere, but nobody has
-> checked yet. Reports from other systems and TVs are very welcome.
+> [!IMPORTANT]
+> MonitorBeam has been tested only on the setup below. It may work elsewhere, but this has not been checked yet.
+> Reports from other systems and TVs are very welcome in the
+> [issue tracker](https://github.com/sinkec/MonitorBeam/issues).
 
-| | |
+| Component | Tested with |
 |---|---|
 | Operating system | Linux Mint 22 (based on Ubuntu 24.04) |
 | Desktop | Cinnamon on X11 |
 | Graphics | NVIDIA, with three monitors |
 | TV | Samsung AU7172 (75") |
 
-## Status and limitations
+## Requirements
 
-Early development. Picture and sound work on the setup above.
+- Linux Mint 22, Ubuntu 24.04, or a similar distribution with GTK 4.14, libadwaita 1.5 and GStreamer 1.24 or newer
+- An X11 session (Wayland is not supported)
+- A Wi-Fi card with Wi-Fi Direct support, managed by NetworkManager. To check, run `iw list` and look for
+  `P2P-client` under the supported interface modes
+- A TV or other receiver with Miracast, often called Screen Mirroring
+
+## Installation
+
+Download the `.deb` package from the [latest release](https://github.com/sinkec/MonitorBeam/releases/latest), then
+install it from the download folder:
+
+    sudo apt install ./monitorbeam_*_amd64.deb
+
+MonitorBeam then appears in the applications menu. To remove it, run `sudo apt remove monitorbeam`.
+
+To build the package yourself, see [Development](#development).
+
+## Usage
+
+1. Turn on Screen Mirroring on the TV.
+2. Start MonitorBeam and choose a monitor. It looks for TVs at once.
+3. Click **Share** next to your TV. If a firewall is running, enter your password when asked. Accept the request on
+   the TV if it asks.
+4. The TV's row shows the state of the session. Click **Stop** there, or in the tray's menu, to end it.
+
+### Settings
+
+| Setting | What it does |
+|---|---|
+| **Resolution and Frame Rate** | Recommended suits most uses. A TV reports its formats only while connecting, so after the first connection MonitorBeam offers only what that TV supports. Until then, it uses the closest format to your choice and tells you if it differs. |
+| **Sound Delay** | Matches the sound to the picture, and can be changed while watching. Raise it if the sound comes first, lower it if it comes late. It can delay the sound by up to 500 ms, and the picture by up to 100 ms. |
+| **Appearance** | Follows the system, or stays light or dark. In the window's menu, under Preferences. |
+| **Keep Running in the Tray** | Closing the window leaves MonitorBeam in the tray, if the desktop has one. Quit from the tray's menu or the window's menu. In the window's menu, under Preferences. |
+
+To try MonitorBeam without a TV, choose **Test Recording…** in the window's menu. It records the chosen monitor to a
+video file.
+
+## Troubleshooting
+
+| Problem | What to try |
+|---|---|
+| The TV is not found | Make sure Screen Mirroring is open on the TV, then click **Search**. |
+| A device appears in Chrome's cast list, but not here | Google Cast is a different protocol, which finds devices through your home network. MonitorBeam supports Miracast only, which needs a TV that is waiting over Wi-Fi Direct. |
+| The TV does not connect | If you use a firewall other than ufw or firewalld, MonitorBeam cannot see it. After 12 seconds, it asks to open the firewall. |
+| The picture stutters | Choose 720p or 30 fps, and move the computer closer to the TV. |
+| The sound does not match the picture | Adjust **Sound Delay** while watching. First check that the video is in sync on the computer. |
+| No sound on the computer after a crash | Start MonitorBeam again. It restores the sound settings. |
+
+To report a problem, include the output of `RUST_LOG=debug monitorbeam`, and the versions from
+**About MonitorBeam → Troubleshooting** in the window's menu.
+
+## Privacy and security
+
+- **Capture needs your action.** The screen is shared or recorded only after you click **Share** or start a recording,
+  and Stop stays available the whole time. The window's title and the tray icon show that it is active.
+- **Monitor pictures** in the window are taken once when it opens and when you click Refresh. They stay in memory, and
+  are never saved or sent anywhere.
+- **Looking for TVs** starts when the window opens, and lasts 30 seconds. It connects to nothing and captures nothing.
+- **Remembered TVs:** the name, hardware address and formats of TVs you have shared with are saved in a private file,
+  `~/.config/monitorbeam/tvs`, on this computer only. Delete the file to forget them.
+- **The program never runs as root.** The TV has to connect to the computer, so a running firewall must let it in. A
+  small separate helper, started through polkit, allows incoming TCP 7236 (RTSP) and UDP 67 (DHCP), only on the Wi-Fi
+  Direct interface. It removes the rules when MonitorBeam ends for any reason, including a crash, and a reboot clears
+  them too. The firewall is never turned off.
+- **No password without a firewall.** If neither ufw nor firewalld is running, MonitorBeam opens nothing and asks for
+  nothing.
+- **The TV is not trusted.** Everything it sends is limited in size, and malformed data ends the session rather than
+  crashing the program.
+
+To report a security problem, please open an
+[issue](https://github.com/sinkec/MonitorBeam/issues) without sensitive details, and ask for a private way to share them.
+
+## Limitations
 
 - **X11 only.** Wayland sessions are not supported.
 - **Mirrors an existing monitor.** It cannot create a virtual extra screen for the TV.
-- **The Wi-Fi card must support Wi-Fi Direct (P2P),** which you can check with `iw list`.
-  NetworkManager must manage the card.
-- **If the program crashes while sharing,** the computer has no sound until you start MonitorBeam
-  again, which restores the settings.
-- **Not yet confirmed:** recovery after a crash, and the test recording from the window.
+- **Picture formats** are limited to what the program can send: up to 1920 × 1080, at 30 or 60 frames per second.
+- **Not yet confirmed:** the firewalld path has not been run on a real firewalld, and asking to open the firewall after
+  12 seconds has not been seen in practice.
 
-## Install
+## Development
 
-There are no ready-made downloads yet, so you build the package yourself. On Linux Mint 22 or
-Ubuntu 24.04, install [Rust](https://rustup.rs) (stable) and the build requirements:
+MonitorBeam is written in Rust, with GTK 4 and libadwaita for the window, GStreamer for video and sound, and
+NetworkManager for Wi-Fi Direct. On Linux Mint 22 or Ubuntu 24.04, install [Rust](https://rustup.rs) (stable) and the
+build requirements:
 
     sudo apt install build-essential libgtk-4-dev libadwaita-1-dev \
         libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
         gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-plugins-ugly gstreamer1.0-libav
 
-Then build and install the package. Building needs no root privileges:
-
-    packaging/build-deb.sh
-    sudo apt install ./target/debian/monitorbeam_*.deb
-
-MonitorBeam now appears in the applications menu. To remove it: `sudo apt remove monitorbeam`.
-
-## Settings
-
-- **Resolution and Frame Rate:** Recommended is best for most uses. The TV reports what it supports
-  only while connecting, so if it lacks your choice, MonitorBeam uses the closest format and tells you.
-- **Appearance** (in the menu, under Preferences): follow the system, or always light or dark.
-- **Keep Running in the Tray** (also under Preferences): closing the window leaves MonitorBeam in the tray, if the desktop has
-  one. Quit from the tray's menu or the window's menu. You can turn this off.
-
-## How to use it
-
-1. Turn on Screen Mirroring on the TV.
-2. Start MonitorBeam and choose a monitor.
-3. Click **Search**, then **Share** next to your TV. Enter your password when asked, and accept the
-   request on the TV if it asks.
-4. A bar at the top of the window shows that sharing is active. Click **Stop** to end it.
-
-**Only TVs that are waiting for Miracast appear,** so turn on Screen Mirroring first. The cast list in
-Chrome can show more devices because Google Cast is a different protocol: it finds devices through your
-home network, while Miracast finds them directly over Wi-Fi Direct. MonitorBeam works with Miracast only.
-If several TVs are found, the list scrolls and the window says how many there are.
-
-If the sound and the picture do not match, adjust **Sound Delay** while watching. Raise it if the
-sound comes first, lower it if the picture does. The value is saved for next time. It can delay the
-sound by up to 500 ms, but the picture by only 100 ms, to keep the stream valid for the TV.
-
-## Privacy and security
-
-- **No telemetry, and no network connections** other than the one to your TV.
-- **The screen is shared only after you click Share,** and a Stop button stays available for the
-  whole session, in the window and in the tray, whose icon changes while sharing.
-- **Monitor pictures** in the window are taken once when it opens and when you click Refresh, so that
-  you can recognize each monitor. They stay in memory, and are never saved or sent anywhere.
-- **The program itself never runs as root.** A small separate helper, started through polkit, allows
-  incoming TCP 7236 (RTSP) and UDP 67 (DHCP), only on the Wi-Fi Direct interface. It removes the
-  rules when MonitorBeam ends for any reason, including a crash. The rules are not saved, so a reboot
-  clears them too. The firewall is never turned off.
-- **Everything received from the TV is treated as untrusted:** sizes are limited, and malformed data
-  ends the session rather than crashing the program.
-
-## Development
-
 Run from the source tree:
 
     RUST_LOG=debug cargo run
 
-To rule out an encoder problem, force one with `MONITORBEAM_ENCODER=x264enc` or
-`MONITORBEAM_ENCODER=nvcudah264enc`. To compare smoothness, request `MONITORBEAM_FRAME_RATE=60`, which
-applies if the TV supports it. To change how often key frames are sent, set
-`MONITORBEAM_KEY_FRAME_DISTANCE` to a number of frames. To compare other settings, use
-`MONITORBEAM_BITRATE_KBIT` with a bitrate, `MONITORBEAM_PACING_MS` to change how far behind real time packets
-are sent evenly (100 by default, 0 turns it off), or `MONITORBEAM_NO_AUDIO=1` to send video only.
+Build the package, which needs no root privileges, and install it:
 
-Sharing needs the firewall helper. The package installs it. Without the package, install it by hand:
+    packaging/build-deb.sh
+    sudo apt install ./target/debian/monitorbeam_*.deb
+
+Run the checks before sending changes:
+
+    cargo fmt --check
+    cargo clippy --all-targets -- -D warnings
+    cargo test
+
+Check the dependencies after changing them:
+
+    cargo install --locked cargo-audit cargo-deny
+    cargo audit
+    cargo deny check
+
+### Firewall helper
+
+Sharing with a firewall running needs the helper, which the package installs. Without the package, install it by hand:
 
     cargo build --release --bin monitorbeam-firewall-helper
     sudo install -D -m 755 -o root -g root target/release/monitorbeam-firewall-helper \
@@ -123,46 +165,45 @@ Sharing needs the firewall helper. The package installs it. Without the package,
     sudo install -m 644 -o root -g root data/io.github.sinkec.MonitorBeam.policy \
         /usr/share/polkit-1/actions/io.github.sinkec.MonitorBeam.policy
 
-With firewalld, also install its zone. This path has not been tested on a real firewalld:
+With firewalld, also install its zone:
 
     sudo install -m 644 -o root -g root data/monitorbeam.firewalld.xml \
         /usr/lib/firewalld/zones/monitorbeam.xml
     sudo firewall-cmd --reload
 
-Checks:
+### Options for testing
 
-    cargo fmt --check
-    cargo clippy --all-targets -- -D warnings
-    cargo test
+These environment variables help to compare settings on a particular TV and network:
 
-Dependency checks use two extra tools:
-
-    cargo install --locked cargo-audit cargo-deny
-    cargo audit
-    cargo deny check
+| Variable | Effect |
+|---|---|
+| `MONITORBEAM_ENCODER` | Forces an encoder, such as `x264enc` or `nvcudah264enc` |
+| `MONITORBEAM_FRAME_RATE` | Requests a frame rate, such as `60`, if the TV supports it |
+| `MONITORBEAM_KEY_FRAME_DISTANCE` | Sets how many frames lie between key frames |
+| `MONITORBEAM_BITRATE_KBIT` | Sets the video bitrate |
+| `MONITORBEAM_PACING_MS` | Sets how far behind real time packets are sent evenly. The default is 100, and 0 turns it off |
+| `MONITORBEAM_NO_AUDIO` | Set to `1` to send video only |
 
 ## License
 
-Copyright © 2026 Matej Jazbinšek. Free software under the GNU General Public License, version 3 or
-later. It comes with absolutely no warranty. See [LICENSE](LICENSE).
+Copyright © 2026 Matej Jazbinšek. MonitorBeam is free software under the
+[GNU General Public License, version 3 or later](LICENSE). It comes with absolutely no warranty.
 
-The libraries compiled into the program are under MIT, Apache-2.0 and similar licenses, all compatible
-with the GPL. The package includes their full texts in
-`/usr/share/doc/monitorbeam/THIRD-PARTY-LICENSES`. GTK, libadwaita, GStreamer and its plugins, and the
-other programs MonitorBeam uses are installed separately, under their own licenses.
+The libraries compiled into the program are under MIT, Apache-2.0 and similar licenses, all compatible with the GPL.
+The package includes their full texts in `/usr/share/doc/monitorbeam/THIRD-PARTY-LICENSES`. GTK, libadwaita,
+GStreamer and its plugins, and the other programs MonitorBeam uses are installed separately, under their own licenses.
 
-MonitorBeam sends H.264 video and AAC audio, using the encoders installed on your system. These formats
-may be covered by patents in some countries. It is your responsibility to check this if it applies to
-your use.
+MonitorBeam sends H.264 video and AAC audio, using the encoders installed on your system. These formats may be covered
+by patents in some countries. It is your responsibility to check this if it applies to your use.
 
 ## Acknowledgements
 
-[GNOME Network Displays](https://gitlab.gnome.org/GNOME/gnome-network-displays) (GPL-3.0-or-later) was
-a valuable reference for how real TVs expect a Miracast source to behave.
+[GNOME Network Displays](https://gitlab.gnome.org/GNOME/gnome-network-displays) (GPL-3.0-or-later) was a valuable
+reference for how real TVs expect a Miracast source to behave.
 
 ## Trademarks
 
-Miracast and Wi-Fi Direct are trademarks of the Wi-Fi Alliance. Samsung is a trademark of Samsung
-Electronics. MonitorBeam is an independent project, is not certified by the Wi-Fi Alliance, and is not
-affiliated with or endorsed by any of these companies. The names are used only to describe what the
-program works with.
+Miracast and Wi-Fi Direct are trademarks of the Wi-Fi Alliance. Samsung is a trademark of Samsung Electronics. Google
+Cast is a trademark of Google LLC. MonitorBeam is an independent project, is not certified by the Wi-Fi Alliance, and
+is not affiliated with or endorsed by any of these companies. The names are used only to describe what the program
+works with.

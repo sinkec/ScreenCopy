@@ -9,7 +9,12 @@ ARCH=$(dpkg --print-architecture)
 ROOT=target/debian/root
 OUTPUT="target/debian/monitorbeam_${VERSION}_${ARCH}.deb"
 
-cargo build --release --locked --bin monitorbeam --bin monitorbeam-firewall-helper
+# Paths in panic messages must not reveal the builder's user name.
+CARGO_DIR="${CARGO_HOME:-$HOME/.cargo}"
+RUSTUP_DIR="${RUSTUP_HOME:-$HOME/.rustup}"
+RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$CARGO_DIR=/cargo \
+    --remap-path-prefix=$RUSTUP_DIR=/rustup --remap-path-prefix=$PWD=/build" \
+    cargo build --release --locked --bin monitorbeam --bin monitorbeam-firewall-helper
 
 rm -rf "$ROOT"
 install -D -m 755 target/release/monitorbeam "$ROOT/usr/bin/monitorbeam"

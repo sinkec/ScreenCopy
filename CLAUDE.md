@@ -104,9 +104,12 @@ firewalld.
 
 ## Miracast design
 
-The UI's Share button does, in order: `firewall::authorize` (the password prompt, before the TV is
-kept waiting), P2P connect, then `wfd::serve` on its own thread (firewall open, listen on the P2P
-address only, one accepted connection, M1-M7, capture only after PLAY). Packet IDs must be 0x1011 for
+The UI's Share button does, in order: `firewall::is_active`, then `firewall::authorize` if a firewall runs (the
+password prompt, before the TV is kept waiting), find the TV again (NetworkManager forgets peers, and auto-search
+can be long past), P2P connect, then `wfd::serve` on its own thread (firewall open if needed, listen on the P2P
+address only, one accepted connection, M1-M7, capture only after PLAY). With no known firewall, nothing asks for a
+password, and the helper is not needed. If the TV does not connect within 12 seconds then, a firewall this program
+cannot see is suspected, and it asks to open the firewall after all. Packet IDs must be 0x1011 for
 video and 0x1100 for audio, or the TV stays black.
 Packets are paced by timestamp (`sync=true`, 100 ms behind real time), found on the real TV to remove
 most stutter: measurements showed capture and encoding were steady, and the TV stuttered on uneven
@@ -145,21 +148,15 @@ Wi-Fi on the PC or the TV, paced sending removing most stutter, the larger send 
 On 2026-11-03 also: the tray, stopping the stream, closing the program, Preferences and themes, the Sound
 Delay row, and sound in sync with the picture.
 
-Still to check with the user, in this order. After each result, update the "Not yet confirmed" list in
-`README.md`:
+The user confirmed on the real TV on 2026-11-03: the redesigned window, searching at startup, the remembered TV, the
+TV's saved formats, 720p and 60 fps, sharing with no firewall, crash recovery, Test Recording from the menu, and Stop
+while connecting.
 
-1. The fixed window on the real TV. An earlier build grew during sharing, because the status text changed its
-   natural size. The fix was measured with a test copy using fake TVs (970 × 630 in every state), not yet with
-   a real session. Monitor pictures being recognizable is also unconfirmed.
-2. What the user meant by the Record button appearing "in the tray". The tray's menu has no such item.
-3. Resolution 720p and frame rate 60 on the TV. The fallback message if the TV lacks a format.
-4. Crash recovery: `pkill -9 -x monitorbeam` while sharing, then start again. Sound must return, with a notice.
-5. Record button: record, Stop, play the file, and check that it shows only the chosen monitor, with the
-   preview in the monitors' place.
-6. Stop while connecting, the About dialog, and the setup dialog when the helper is missing.
+Still unconfirmed, and listed in `README.md`: the firewalld path, and asking to open the firewall after 12 seconds.
 
-After that, ask the user about: a downloadable `.deb` on GitHub Releases (recommended next), GitHub
-Actions for the checks, translations, real fuzz targets. Flatpak was left out on purpose: the
+Version 0.1.0 is released on GitHub with its `.deb`. For a new release, update `CHANGELOG.md` and the version in
+`Cargo.toml`, and view any new screenshot first. Ask the user about: GitHub Actions for the checks, and real fuzz
+targets. Translations were declined for now: the program stays in English. Flatpak was left out on purpose: the
 sandbox conflicts with pkexec, NetworkManager access and X11 capture.
 
 Known on the user's computer: new GTK programs log `Unable to connect to the accessibility bus` until
@@ -169,11 +166,15 @@ Network Displays may exist; it is not ours, so it is never removed automatically
 ## Window and tray
 
 The window has a fixed size, 970 × 630, and must not need a scrollbar, also on a 1366 × 768 screen. Anything
-that appears later must not change its size: banners cover the content, and a recording's preview takes
-the monitors' place. A non-resizable window follows its content's natural size, so a `ScrolledWindow` with
+that appears later must not change its size: a recording's preview takes the monitors' place, and there are no
+banners, which used to cover the content. A non-resizable window follows its content's natural size, so a `ScrolledWindow` with
 `External` scrollbars holds the size. It clips anything too tall, so check the content's height after changing the
-layout: it is exactly 630 now. Only the TV list scrolls, from the third TV on, with a visible scrollbar and the
-number of TVs in the status text.
+layout: it is exactly 630 now. Only the TV list scrolls, from the fourth TV on, with a visible scrollbar and the
+number of TVs in the section's title.
+
+Layout: one spacing of 18 px around and between the parts (`section.rs` sets the rest), and all cards use
+libadwaita's `card` or `boxed-list`, so that shadows match. A session's state and Stop are on the TV's row, while
+other TVs are hidden. The window's title also says when the screen is being captured. The selection on a monitor is drawn inside the tile, because an outline got cut off by its neighbours.
 
 Google Cast finds more devices than Miracast because it uses the home network, while Miracast needs a TV that
 is listening over Wi-Fi Direct. Supporting Cast would be a separate protocol and would need LAN traffic, which
@@ -181,6 +182,12 @@ rule 6 does not allow as written, so it needs the user's decision.
 
 When testing windows, act only on the test process's own window id (see the project memory). Blur any
 screenshot that shows monitor pictures, because they contain the user's screens.
+
+Searching starts when the window opens: it connects to nothing and captures nothing. The user chose this, and the
+README says so, which rule 6 asks for. `tv_memory.rs` saves the last used TV, shown first in the list even before it
+is found, and each TV's formats, learned in M3 because a TV gives them only during a connection. The picture rows offer
+only the selected TV's known formats. Test Recording is in the window's menu, since most people do not need it, with
+Stop on top of its preview. The window stays in English, by the user's choice.
 
 The monitor picker draws monitors in their real size, position and rotation, each with a picture. By
 default, closing the window hides it into the tray (`ksni`), and only the tray's Quit or the window
