@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use gtk::glib;
-use screencopy::p2p::P2pClient;
+use monitorbeam::p2p::P2pClient;
 
 const SEARCH_TIME: Duration = Duration::from_secs(10);
 

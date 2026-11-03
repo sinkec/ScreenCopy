@@ -7,7 +7,7 @@ const MAX_PARAMETERS: usize = 64;
 const PROFILE_CONSTRAINED_BASELINE: u8 = 0x01;
 const NONE: &str = "none";
 /// Asks for a frame rate, to compare smoothness on a particular TV and network.
-const FRAME_RATE_VARIABLE: &str = "SCREENCOPY_FRAME_RATE";
+const FRAME_RATE_VARIABLE: &str = "MONITORBEAM_FRAME_RATE";
 
 /// H.264 levels in the bit positions the specification gives them.
 const LEVEL_3_1: u8 = 0x01;

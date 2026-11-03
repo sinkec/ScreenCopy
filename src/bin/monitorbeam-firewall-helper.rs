@@ -26,13 +26,13 @@ const WFD_RTSP_PORT: &str = "7236";
 /// DHCP requests from the TV while this computer is the group owner.
 const DHCP_SERVER_PORT: &str = "67";
 const IPTABLES_RULES: [(&str, &str); 2] = [("tcp", WFD_RTSP_PORT), ("udp", DHCP_SERVER_PORT)];
-const RULE_COMMENT: &str = "screencopy";
+const RULE_COMMENT: &str = "monitorbeam";
 /// Seconds to wait for the iptables lock, so that closing cannot hang forever.
 const IPTABLES_WAIT: &str = "5";
 /// Removal repeats in case an earlier session left duplicates behind.
 const MAX_DUPLICATE_RULES: usize = 16;
-/// Installed from `data/screencopy.firewalld.xml`.
-const FIREWALLD_ZONE: &str = "screencopy";
+/// Installed from `data/monitorbeam.firewalld.xml`.
+const FIREWALLD_ZONE: &str = "monitorbeam";
 
 const BACKEND_FIREWALLD: &str = "firewalld";
 const BACKEND_IPTABLES: &str = "iptables";
@@ -275,13 +275,13 @@ mod tests {
     }
 
     const ADD_TCP: &str = "iptables -w 5 -I INPUT -i p2p-wlo1-0 -p tcp --dport 7236 \
-                           -m comment --comment screencopy -j ACCEPT";
+                           -m comment --comment monitorbeam -j ACCEPT";
     const ADD_UDP: &str = "iptables -w 5 -I INPUT -i p2p-wlo1-0 -p udp --dport 67 \
-                           -m comment --comment screencopy -j ACCEPT";
+                           -m comment --comment monitorbeam -j ACCEPT";
     const DEL_TCP: &str = "iptables -w 5 -D INPUT -i p2p-wlo1-0 -p tcp --dport 7236 \
-                           -m comment --comment screencopy -j ACCEPT";
+                           -m comment --comment monitorbeam -j ACCEPT";
     const DEL_UDP: &str = "iptables -w 5 -D INPUT -i p2p-wlo1-0 -p udp --dport 67 \
-                           -m comment --comment screencopy -j ACCEPT";
+                           -m comment --comment monitorbeam -j ACCEPT";
 
     #[test]
     fn opens_only_the_two_rules_on_the_interface() {
@@ -334,8 +334,8 @@ mod tests {
         assert_eq!(
             runner.calls,
             [
-                "firewall-cmd --zone=screencopy --change-interface=p2p-wlo1-0",
-                "firewall-cmd --zone=screencopy --remove-interface=p2p-wlo1-0",
+                "firewall-cmd --zone=monitorbeam --change-interface=p2p-wlo1-0",
+                "firewall-cmd --zone=monitorbeam --remove-interface=p2p-wlo1-0",
             ]
         );
     }

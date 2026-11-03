@@ -46,9 +46,9 @@ impl ksni::Tray for TrayIcon {
 
     fn title(&self) -> String {
         if self.sharing {
-            "ScreenCopy: sharing the screen".to_owned()
+            "MonitorBeam: sharing the screen".to_owned()
         } else {
-            "ScreenCopy".to_owned()
+            "MonitorBeam".to_owned()
         }
     }
 
@@ -74,7 +74,7 @@ impl ksni::Tray for TrayIcon {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut items = vec![Self::item("Open ScreenCopy", TrayCommand::Show)];
+        let mut items = vec![Self::item("Open MonitorBeam", TrayCommand::Show)];
         if self.sharing {
             items.push(Self::item("Stop Sharing", TrayCommand::StopSharing));
         }
@@ -137,10 +137,10 @@ mod tests {
 
     #[test]
     fn stop_is_offered_only_while_sharing() {
-        assert_eq!(labels(&icon(false).0), ["Open ScreenCopy", "Quit"]);
+        assert_eq!(labels(&icon(false).0), ["Open MonitorBeam", "Quit"]);
         assert_eq!(
             labels(&icon(true).0),
-            ["Open ScreenCopy", "Stop Sharing", "Quit"]
+            ["Open MonitorBeam", "Stop Sharing", "Quit"]
         );
     }
 

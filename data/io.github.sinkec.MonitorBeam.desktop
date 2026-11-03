@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=ScreenCopy
+Name=MonitorBeam
 GenericName=Screen Mirroring
 Comment=Mirror one monitor to your TV over Miracast
-Exec=screencopy
-Icon=io.github.sinkec.ScreenCopy
+Exec=monitorbeam
+Icon=io.github.sinkec.MonitorBeam
 Terminal=false
 Categories=Utility;GTK;
 Keywords=miracast;mirror;cast;tv;display;wifi;

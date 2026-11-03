@@ -27,7 +27,7 @@ const READ_CHUNK: usize = 4096;
 const MAX_BUFFERED: usize = 32 * 1024;
 
 /// Leaves out the audio, to find out whether a TV stutters while following it.
-const NO_AUDIO_VARIABLE: &str = "SCREENCOPY_NO_AUDIO";
+const NO_AUDIO_VARIABLE: &str = "MONITORBEAM_NO_AUDIO";
 const STATUS_OK: u16 = 200;
 const STATUS_NOT_SUPPORTED: u16 = 551;
 const SERVER_RTP_PORT: u16 = 19000;

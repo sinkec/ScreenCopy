@@ -7,10 +7,10 @@ use std::fs;
 
 /// Written and removed only by the helper, so it cannot be forged by a user.
 /// `/run` is emptied at boot, exactly like the rules the file describes.
-pub const MARKER_PATH: &str = "/run/screencopy-firewall";
+pub const MARKER_PATH: &str = "/run/monitorbeam-firewall";
 
 /// The kernel limits process names to 15 bytes.
-const HELPER_PROCESS_NAME: &str = "screencopy-fire";
+const HELPER_PROCESS_NAME: &str = "monitorbeam-fire";
 
 /// Longest interface name the kernel accepts (`IFNAMSIZ` without the NUL).
 const MAX_INTERFACE_LENGTH: usize = 15;

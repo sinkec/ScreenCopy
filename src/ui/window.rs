@@ -117,7 +117,7 @@ fn application_group(settings: &SettingsStore, has_tray: bool) -> adw::Preferenc
     if has_tray {
         let keep = adw::SwitchRow::builder()
             .title("Keep Running in the Tray")
-            .subtitle("Closing the window leaves ScreenCopy in the system tray.")
+            .subtitle("Closing the window leaves MonitorBeam in the system tray.")
             .active(settings.get().close_to_tray)
             .build();
         let store = settings.clone();
@@ -136,7 +136,7 @@ fn show_tray_notice(app: &adw::Application, settings: &SettingsStore) {
         return;
     }
     settings.update(|settings| settings.tray_notice_shown = true);
-    let notification = gio::Notification::new("ScreenCopy is still running");
+    let notification = gio::Notification::new("MonitorBeam is still running");
     notification.set_body(Some(
         "Open it from the system tray, or right-click the icon there to quit.",
     ));
@@ -195,7 +195,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
 
     let menu = gio::Menu::new();
     menu.append(Some("Preferences"), Some("win.preferences"));
-    menu.append(Some("About ScreenCopy"), Some("win.about"));
+    menu.append(Some("About MonitorBeam"), Some("win.about"));
     menu.append(Some("Quit"), Some("app.quit"));
     let menu_button = gtk::MenuButton::builder()
         .icon_name("open-menu-symbolic")

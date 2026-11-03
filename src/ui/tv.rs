@@ -358,8 +358,8 @@ impl TvPanel {
         let dialog = adw::AlertDialog::builder()
             .heading("One More Setup Step")
             .body(
-                "ScreenCopy needs its firewall helper, so that the TV can connect. \
-                 Install ScreenCopy from its package, or see “Firewall helper” in the README \
+                "MonitorBeam needs its firewall helper, so that the TV can connect. \
+                 Install MonitorBeam from its package, or see “Firewall helper” in the README \
                  when running from source.",
             )
             .build();
@@ -464,7 +464,7 @@ impl TvPanel {
                             "The computer's sound could not be captured, so the TV stays silent.",
                         ),
                         Sound::Absent => {
-                            self.show_toast("The TV accepts no sound format ScreenCopy can send.");
+                            self.show_toast("The TV accepts no sound format MonitorBeam can send.");
                         }
                     }
                 }

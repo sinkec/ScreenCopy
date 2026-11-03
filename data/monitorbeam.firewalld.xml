@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <zone>
-  <short>ScreenCopy</short>
+  <short>MonitorBeam</short>
   <description>Wi-Fi Direct connection to a TV during screen mirroring.</description>
   <port protocol="tcp" port="7236"/>
   <port protocol="udp" port="67"/>

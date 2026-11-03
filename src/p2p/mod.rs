@@ -309,7 +309,7 @@ fn connection_settings<'a>(
     user: Option<&str>,
 ) -> HashMap<&'static str, HashMap<&'static str, Value<'a>>> {
     let mut general = HashMap::from([
-        ("id", Value::from("ScreenCopy")),
+        ("id", Value::from("MonitorBeam")),
         ("type", Value::from("wifi-p2p")),
         ("autoconnect", Value::from(false)),
     ]);

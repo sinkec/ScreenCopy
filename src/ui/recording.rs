@@ -13,7 +13,7 @@ use tracing::{debug, error, info};
 use crate::capture::monitor::Monitor;
 use crate::capture::recorder::{Encoder, Recorder, RecorderEvent};
 
-const DEFAULT_FILE_NAME: &str = "screencopy-test.ts";
+const DEFAULT_FILE_NAME: &str = "monitorbeam-test.ts";
 const PREVIEW_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct Recording {

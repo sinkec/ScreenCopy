@@ -1,4 +1,4 @@
-//! ScreenCopy clones one selected monitor to a TV over Miracast.
+//! MonitorBeam clones one selected monitor to a TV over Miracast.
 
 pub mod audio;
 pub mod capture;

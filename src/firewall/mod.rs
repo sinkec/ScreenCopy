@@ -1,6 +1,6 @@
 //! Session-scoped firewall rules for the Wi-Fi Direct interface.
 //!
-//! All privileged work happens in `screencopy-firewall-helper`, started through
+//! All privileged work happens in `monitorbeam-firewall-helper`, started through
 //! `pkexec`. The helper removes the rules when the pipe to it closes, so a
 //! crash of this program cannot leave them behind. Only the helper being killed
 //! can, and then `restore_stale` finds them through the helper's marker file.
@@ -19,7 +19,7 @@ use protocol::{MARKER_PATH, Marker, is_valid_p2p_interface};
 
 const PKEXEC: &str = "/usr/bin/pkexec";
 /// Fixed and root-owned: the polkit policy authorizes exactly this path.
-const HELPER_PATH: &str = "/usr/libexec/screencopy/screencopy-firewall-helper";
+const HELPER_PATH: &str = "/usr/libexec/monitorbeam/monitorbeam-firewall-helper";
 const READY: &str = "ready";
 /// `pkexec` exit codes when authorization was dismissed or refused.
 const PKEXEC_DISMISSED: i32 = 126;
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn dropping_a_session_waits_for_the_helper() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("screencopy-drop-test-{}", std::process::id()));
+        let path = dir.join(format!("monitorbeam-drop-test-{}", std::process::id()));
         let script = format!(
             "echo ready; cat > /dev/null; echo done > '{}'",
             path.display()

@@ -1,11 +1,11 @@
 [package]
-name = "screencopy"
+name = "monitorbeam"
 version = "0.1.0"
 edition = "2024"
-default-run = "screencopy"
+default-run = "monitorbeam"
 license = "GPL-3.0-or-later"
 authors = ["Matej Jazbinšek"]
-repository = "https://github.com/sinkec/ScreenCopy"
+repository = "https://github.com/sinkec/MonitorBeam"
 description = "Clone one monitor to a TV over Miracast"
 
 [dependencies]

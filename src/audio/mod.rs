@@ -16,9 +16,9 @@ use tracing::{debug, info, warn};
 
 use crate::settings::write_private_file;
 
-const SINK_NAME: &str = "screencopy_tv";
+const SINK_NAME: &str = "monitorbeam_tv";
 /// The source GStreamer reads the virtual output's sound from.
-pub const MONITOR_SOURCE: &str = "screencopy_tv.monitor";
+pub const MONITOR_SOURCE: &str = "monitorbeam_tv.monitor";
 const NULL_SINK_MODULE: &str = "module-null-sink";
 const STATE_FILE: &str = "audio-route";
 const MAX_STATE_LENGTH: usize = 64 * 1024;
@@ -110,7 +110,7 @@ fn state_path() -> Result<PathBuf, AudioError> {
             Some(Path::new(&home).join(".local/state"))
         })
         .ok_or(AudioError::NoStateDirectory)?;
-    Ok(base.join("screencopy").join(STATE_FILE))
+    Ok(base.join("monitorbeam").join(STATE_FILE))
 }
 
 fn write_state(path: &Path, state: &RouteState) -> Result<(), AudioError> {
@@ -256,7 +256,7 @@ impl AudioRoute {
             &sink_name,
             "rate=48000",
             "channels=2",
-            "sink_properties=device.description=ScreenCopy-TV",
+            "sink_properties=device.description=MonitorBeam-TV",
         ])?;
         route.pactl.run(&["set-default-sink", SINK_NAME])?;
         route.move_streams()?;
@@ -331,12 +331,12 @@ mod tests {
     const HEADSET: &str = "headset";
     const SINKS: &str = "5\theadset\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n\
                          6\tspeakers\tPipeWire\ts16le 2ch 48000Hz\tIDLE\n\
-                         9\tscreencopy_tv\tPipeWire\tfloat32le 2ch 48000Hz\tIDLE\n";
+                         9\tmonitorbeam_tv\tPipeWire\tfloat32le 2ch 48000Hz\tIDLE\n";
     const MODULES: &str = "1\tlibpipewire-module-rt\t{\n\
                            \x20   nice.level = -11\n\
                            }\n\
                            7\tmodule-null-sink\tsink_name=other rate=48000\t\n\
-                           8\tmodule-null-sink\tsink_name=screencopy_tv rate=48000 channels=2\t\n";
+                           8\tmodule-null-sink\tsink_name=monitorbeam_tv rate=48000 channels=2\t\n";
 
     /// A pretend sound server that records every command.
     #[derive(Clone, Default)]
@@ -405,7 +405,7 @@ mod tests {
 
     impl TempDir {
         fn new(name: &str) -> Self {
-            let name = format!("screencopy-audio-{}-{name}", std::process::id());
+            let name = format!("monitorbeam-audio-{}-{name}", std::process::id());
             let path = std::env::temp_dir().join(name);
             let _ = fs::remove_dir_all(&path);
             Self(path)
@@ -433,9 +433,10 @@ mod tests {
         let route = activate(&fake, &dir).unwrap();
 
         assert!(
-            fake.calls().iter().any(
-                |call| call.starts_with("load-module module-null-sink sink_name=screencopy_tv")
-            )
+            fake.calls()
+                .iter()
+                .any(|call| call
+                    .starts_with("load-module module-null-sink sink_name=monitorbeam_tv"))
         );
         assert_eq!(*fake.default.borrow(), SINK_NAME);
         assert!(fake.called("move-sink-input 20 9"));
@@ -451,7 +452,7 @@ mod tests {
         assert!(activate(&fake, &dir).is_err());
         // The failed route was dropped, which removes the state again.
         assert!(!dir.state().exists());
-        assert!(fake.called("load-module module-null-sink sink_name=screencopy_tv rate=48000 channels=2 sink_properties=device.description=ScreenCopy-TV"));
+        assert!(fake.called("load-module module-null-sink sink_name=monitorbeam_tv rate=48000 channels=2 sink_properties=device.description=MonitorBeam-TV"));
     }
 
     #[test]
@@ -485,11 +486,11 @@ mod tests {
             None
         );
         assert_eq!(
-            find_our_module("7\tmodule-null-sink\tsink_name=screencopy_tv_2\t\n"),
+            find_our_module("7\tmodule-null-sink\tsink_name=monitorbeam_tv_2\t\n"),
             None
         );
         assert_eq!(
-            find_our_module("7\tmodule-other\tsink_name=screencopy_tv\t\n"),
+            find_our_module("7\tmodule-other\tsink_name=monitorbeam_tv\t\n"),
             None
         );
     }
@@ -630,7 +631,7 @@ mod tests {
             parse_streams("20\t5\t1\tPipeWire\ts16le\nbad line\n\n21\tx\t1\n"),
             [(20, 5)]
         );
-        assert_eq!(find_sink(SINKS, "screencopy_tv"), Some(9));
+        assert_eq!(find_sink(SINKS, "monitorbeam_tv"), Some(9));
         assert_eq!(find_sink(SINKS, "missing"), None);
     }
 }

@@ -18,9 +18,9 @@ use crate::wfd::session::{MediaStream, Sound, StreamTarget};
 /// a stream to carry audio.
 const SILENT_AUDIO_SOURCE: &str = "audiotestsrc is-live=true wave=silence";
 const AAC_ENCODER: &str = "avenc_aac";
-const KEY_FRAME_VARIABLE: &str = "SCREENCOPY_KEY_FRAME_DISTANCE";
-const BITRATE_VARIABLE: &str = "SCREENCOPY_BITRATE_KBIT";
-const PACING_VARIABLE: &str = "SCREENCOPY_PACING_MS";
+const KEY_FRAME_VARIABLE: &str = "MONITORBEAM_KEY_FRAME_DISTANCE";
+const BITRATE_VARIABLE: &str = "MONITORBEAM_BITRATE_KBIT";
+const PACING_VARIABLE: &str = "MONITORBEAM_PACING_MS";
 /// Chosen on a real TV: visibly the smoothest of the settings tried.
 const DEFAULT_PACING_MS: u32 = 100;
 /// A single key frame can exceed the default send buffer of about 200 kB, and
@@ -165,7 +165,7 @@ fn pacing_options(delay_ms: u32) -> String {
 
 fn system_audio_source() -> String {
     format!(
-        "pulsesrc device={MONITOR_SOURCE} client-name=ScreenCopy buffer-time=100000 \
+        "pulsesrc device={MONITOR_SOURCE} client-name=MonitorBeam buffer-time=100000 \
          latency-time=10000 provide-clock=false do-timestamp=true"
     )
 }
@@ -430,7 +430,7 @@ mod tests {
     fn system_audio_pipeline_is_valid_and_reads_only_the_virtual_output() {
         gst::init().unwrap();
         let source = system_audio_source();
-        assert!(source.contains("device=screencopy_tv.monitor"));
+        assert!(source.contains("device=monitorbeam_tv.monitor"));
         let description = stream_description(
             TEST_SOURCE,
             Encoder::software(),

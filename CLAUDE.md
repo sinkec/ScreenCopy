@@ -1,10 +1,14 @@
-# ScreenCopy
+# MonitorBeam
 
-Open-source Rust program (package `screencopy`) for Linux Mint (Cinnamon, X11) that clones ONE
+Open-source Rust program (package `monitorbeam`) for Linux Mint (Cinnamon, X11) that clones ONE
 selected monitor to a TV over Miracast (Wi-Fi Display), with a clean, simple UI similar to the
 experience on Windows or Apple. Intended for wide use, so it must be safe and reliable.
 
 **Language: talk to the user in Slovene. Code and comments are in English.**
+
+The program was called ScreenCopy until 2026-11-03. That name was too close to `scrcpy`, which mirrors Android
+phones to a computer and is short for "screen copy". SoloCast (a HyperX microphone) and MonitorCast (i-PRO access
+control software) were rejected as taken. The local folder may still be called `ScreenCopy`.
 
 ## Decisions (do not change without asking)
 
@@ -90,12 +94,12 @@ experience on Windows or Apple. Intended for wide use, so it must be safe and re
 
 ## Firewall design
 
-`screencopy-firewall-helper` (std only, no project dependencies) runs as root through `pkexec`. Its
+`monitorbeam-firewall-helper` (std only, no project dependencies) runs as root through `pkexec`. Its
 stdin pipe stays open for the session, and it removes the rules on EOF, so a crash of the program is
 covered. With ufw it inserts non-persistent `iptables` rules into `INPUT` rather than `ufw` rules,
-which would be saved to disk. Its root-owned marker `/run/screencopy-firewall` records a session and
+which would be saved to disk. Its root-owned marker `/run/monitorbeam-firewall` records a session and
 replaces a state file in XDG directories: it cannot be forged and disappears at boot, like the
-rules. The firewalld path needs the installed `screencopy` zone and has not been run on a real
+rules. The firewalld path needs the installed `monitorbeam` zone and has not been run on a real
 firewalld.
 
 ## Miracast design
@@ -111,20 +115,20 @@ The UDP send buffer is 2 MB, because a key frame (up to about 330 kB) overflowed
 `SndbufErrors` in `/proc/net/snmp` fell from about 0.7 per second to 0, and the picture improved. Check that
 counter first if stutter returns.
 The default stays 30 fps: on the real TV, 60 fps showed the ball's bounce more often but stuttered
-more. `SCREENCOPY_FRAME_RATE=60` still requests it; a choice in the window could be added later.
+more. `MONITORBEAM_FRAME_RATE=60` still requests it; a choice in the window could be added later.
 
 ## Audio design
 
-`audio::AudioRoute` lives as long as the stream: null sink `screencopy_tv`, default output switched,
+`audio::AudioRoute` lives as long as the stream: null sink `monitorbeam_tv`, default output switched,
 all sink inputs moved (and rechecked every 2 s, since apps can have remembered outputs). Each stream's
-original sink is recorded in `$XDG_STATE_HOME/screencopy/audio-route` before changing anything, and is
+original sink is recorded in `$XDG_STATE_HOME/monitorbeam/audio-route` before changing anything, and is
 restored on drop or on the next start after a crash. Tests use `FakePactl` and must never touch the
 user's real sound system. On this machine a leftover `gnome_network_displays` null sink from GNOME
 Network Displays was the default output; it is not ours, so it is never removed automatically.
 
 ## Status and next steps (2026-11-03)
 
-Author: Matej Jazbinšek, GitHub user `sinkec`, repository `sinkec/ScreenCopy` (public, branch `main`).
+Author: Matej Jazbinšek, GitHub user `sinkec`, repository `sinkec/MonitorBeam` (public, branch `main`).
 The installed `.deb` may be older than the working tree, so compare before relying on what the installed
 program can do.
 
@@ -149,7 +153,7 @@ Still to check with the user, in this order. After each result, update the "Not 
    a real session. Monitor pictures being recognizable is also unconfirmed.
 2. What the user meant by the Record button appearing "in the tray". The tray's menu has no such item.
 3. Resolution 720p and frame rate 60 on the TV. The fallback message if the TV lacks a format.
-4. Crash recovery: `pkill -9 -x screencopy` while sharing, then start again. Sound must return, with a notice.
+4. Crash recovery: `pkill -9 -x monitorbeam` while sharing, then start again. Sound must return, with a notice.
 5. Record button: record, Stop, play the file, and check that it shows only the chosen monitor, with the
    preview in the monitors' place.
 6. Stop while connecting, the About dialog, and the setup dialog when the helper is missing.
@@ -193,6 +197,10 @@ dependencies, and keep `deny.toml` compatible with GPL-3.0-or-later.
 
 ## Open questions
 
+- The polkit policy uses `auth_admin_keep`, so for a few minutes after the password, other programs of the same
+  user could start the helper without asking. `firewall::authorize` depends on it: it asks early, and the firewall
+  opens later with no second prompt. Plain `auth_admin` would need that flow changed. The helper's fixed actions
+  limit the risk. An independent review of the helper is still worth doing before promoting the program.
 - `deny.toml` ignores three "unmaintained" advisories for zbus 5 crates (not vulnerabilities), needed by
   `ksni`. Remove them when `ksni` moves to zbus 6, then move this project back to zbus 6 as well.
 - Real fuzz targets (`cargo-fuzz`) need a nightly toolchain, postponed: the user is not familiar with

@@ -36,7 +36,7 @@ pub struct Encoder {
 }
 
 /// Forces one encoder by element name, to tell encoder problems from others.
-const ENCODER_OVERRIDE_VARIABLE: &str = "SCREENCOPY_ENCODER";
+const ENCODER_OVERRIDE_VARIABLE: &str = "MONITORBEAM_ENCODER";
 
 /// In order of preference. The older `nvh264enc` is left out on purpose:
 /// its presets are rejected by current NVIDIA drivers.
@@ -350,7 +350,7 @@ mod tests {
 
     impl TempFile {
         fn new(name: &str) -> Self {
-            let name = format!("screencopy-{}-{name}.ts", std::process::id());
+            let name = format!("monitorbeam-{}-{name}.ts", std::process::id());
             Self(std::env::temp_dir().join(name))
         }
     }
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn unwritable_path_is_an_error() {
         gst::init().unwrap();
-        let path = Path::new("/nonexistent-screencopy-directory/test.ts");
+        let path = Path::new("/nonexistent-monitorbeam-directory/test.ts");
         let result = Recorder::with_source(&test_source(1), TEST_SIZE, path, X264, |_| {});
         assert!(matches!(result, Err(RecorderError::Start(_))));
     }

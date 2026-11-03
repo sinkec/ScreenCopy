@@ -12,9 +12,9 @@ import subprocess
 import sys
 
 LICENSE_PREFIXES = ("LICEN", "COPYING", "UNLICENSE", "NOTICE")
-HEADER = """Third-party software compiled into ScreenCopy
+HEADER = """Third-party software compiled into MonitorBeam
 
-ScreenCopy is licensed under the GNU GPL, version 3 or later. It includes the
+MonitorBeam is licensed under the GNU GPL, version 3 or later. It includes the
 following libraries, each under its own license, reproduced below.
 """
 
@@ -62,7 +62,7 @@ def main(output):
     missing = []
     packages = sorted(metadata["packages"], key=lambda package: package["name"])
     for package in packages:
-        if package["name"] == "screencopy":
+        if package["name"] == "monitorbeam":
             continue
         if (package["name"], "v" + package["version"]) not in linked:
             continue

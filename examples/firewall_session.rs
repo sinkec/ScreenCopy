@@ -5,7 +5,7 @@
 
 use std::io::BufRead as _;
 
-use screencopy::firewall::FirewallSession;
+use monitorbeam::firewall::FirewallSession;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let interface = std::env::args()

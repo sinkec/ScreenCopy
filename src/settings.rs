@@ -172,7 +172,7 @@ fn config_path() -> Option<PathBuf> {
         .filter(|value| Path::new(value).is_absolute())
         .map(PathBuf::from)
         .or_else(|| Some(Path::new(&std::env::var_os("HOME")?).join(".config")))?;
-    Some(base.join("screencopy").join("settings"))
+    Some(base.join("monitorbeam").join("settings"))
 }
 
 /// Replaces the file in one step, so that a crash cannot leave half of it. The
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn written_file_is_private() {
         let directory =
-            std::env::temp_dir().join(format!("screencopy-settings-{}", std::process::id()));
+            std::env::temp_dir().join(format!("monitorbeam-settings-{}", std::process::id()));
         let path = directory.join("nested").join("settings");
         write_private_file(&path, b"x").unwrap();
         let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;

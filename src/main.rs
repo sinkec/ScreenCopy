@@ -1,4 +1,4 @@
-//! ScreenCopy clones one selected monitor to a TV over Miracast.
+//! MonitorBeam clones one selected monitor to a TV over Miracast.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::glib;
-use screencopy::ui;
+use monitorbeam::ui;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
