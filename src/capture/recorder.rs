@@ -143,7 +143,7 @@ pub enum RecorderEvent {
     Failed(String),
 }
 
-/// One RGBA preview image.
+/// One preview image, in the same format as a thumbnail: no alpha channel.
 pub struct PreviewFrame {
     pub width: i32,
     pub height: i32,
@@ -296,7 +296,7 @@ fn pipeline_description(source: &str, preview_size: (i32, i32), encoder: Encoder
          ! filesink name=output \
          split. ! queue leaky=downstream max-size-buffers=1 \
          ! videorate ! videoscale ! videoconvert \
-         ! video/x-raw,format=RGBA,width={preview_width},height={preview_height},\
+         ! video/x-raw,format=RGBx,width={preview_width},height={preview_height},\
          pixel-aspect-ratio=1/1,framerate={PREVIEW_FRAME_RATE}/1 \
          ! appsink name=preview drop=true max-buffers=1 sync=false wait-on-eos=false",
         encoder = encoder.description,

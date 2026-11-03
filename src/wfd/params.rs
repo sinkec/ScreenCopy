@@ -109,32 +109,75 @@ fn parse_video_formats(value: &str) -> Vec<H264Support> {
         .collect()
 }
 
+/// What the user would like. Nothing set means the recommended format.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VideoPreference {
+    pub height: Option<u32>,
+    pub frame_rate: Option<u32>,
+}
+
+impl VideoMode {
+    /// Whether this is what the user asked for.
+    pub fn satisfies(&self, preference: VideoPreference) -> bool {
+        preference.height.is_none_or(|height| height == self.height)
+            && preference
+                .frame_rate
+                .is_none_or(|rate| rate == self.frame_rate)
+    }
+}
+
 /// The best format that the TV supports in Constrained Baseline, if any.
 pub fn choose_video_mode(video_formats: &str) -> Option<VideoMode> {
-    let preferred_rate = std::env::var(FRAME_RATE_VARIABLE)
+    choose_video_mode_for(video_formats, VideoPreference::default())
+}
+
+/// The closest format to `preference` that the TV supports.
+pub fn choose_video_mode_for(
+    video_formats: &str,
+    preference: VideoPreference,
+) -> Option<VideoMode> {
+    let forced_rate = std::env::var(FRAME_RATE_VARIABLE)
         .ok()
         .and_then(|value| value.parse().ok());
-    choose_video_mode_at_rate(video_formats, preferred_rate)
+    let preference = VideoPreference {
+        frame_rate: forced_rate.or(preference.frame_rate),
+        ..preference
+    };
+    closest_video_mode(video_formats, preference)
 }
 
 /// Prefers `preferred_rate` where the TV offers it, then the usual order.
-fn choose_video_mode_at_rate(
-    video_formats: &str,
-    preferred_rate: Option<u32>,
-) -> Option<VideoMode> {
+/// The usual order applies within each step: both wishes, then the size alone,
+/// then the rate alone, then whatever is best.
+fn closest_video_mode(video_formats: &str, preference: VideoPreference) -> Option<VideoMode> {
     let support: Vec<H264Support> = parse_video_formats(video_formats)
         .into_iter()
         .filter(|entry| entry.profile & PROFILE_CONSTRAINED_BASELINE != 0)
         .collect();
-    let supported = |mode: &VideoMode| {
-        support
-            .iter()
-            .any(|entry| entry.cea & mode.cea_bit != 0 && entry.level >= mode.level)
-    };
-    MODES
+    let supported: Vec<VideoMode> = MODES
         .into_iter()
-        .find(|mode| Some(mode.frame_rate) == preferred_rate && supported(mode))
-        .or_else(|| MODES.into_iter().find(|mode| supported(mode)))
+        .filter(|mode| {
+            support
+                .iter()
+                .any(|entry| entry.cea & mode.cea_bit != 0 && entry.level >= mode.level)
+        })
+        .collect();
+    let height_only = VideoPreference {
+        frame_rate: None,
+        ..preference
+    };
+    let rate_only = VideoPreference {
+        height: None,
+        ..preference
+    };
+    [
+        preference,
+        height_only,
+        rate_only,
+        VideoPreference::default(),
+    ]
+    .into_iter()
+    .find_map(|wish| supported.iter().copied().find(|mode| mode.satisfies(wish)))
 }
 
 /// Whether the TV lists AAC among its audio formats.
@@ -182,21 +225,58 @@ mod tests {
         assert_eq!(chosen.level_name(), "4");
     }
 
-    #[test]
-    fn prefers_the_requested_frame_rate_on_a_real_tv() {
-        // As reported by a Samsung AU7172 TV.
-        let formats = "40 00 01 10 000001e3 0f3fffff 00000fff 00 0000 00c8 01 none none";
-        let usual = choose_video_mode_at_rate(formats, None).unwrap();
-        assert_eq!((usual.height, usual.frame_rate), (1080, 30));
-        let smooth = choose_video_mode_at_rate(formats, Some(60)).unwrap();
-        assert_eq!((smooth.height, smooth.frame_rate), (1080, 60));
-        assert_eq!(smooth.level_name(), "4.2");
+    const REAL_TV: &str = "40 00 01 10 000001e3 0f3fffff 00000fff 00 0000 00c8 01 none none";
+
+    fn wish(height: Option<u32>, frame_rate: Option<u32>) -> VideoPreference {
+        VideoPreference { height, frame_rate }
     }
 
     #[test]
-    fn unavailable_frame_rate_falls_back_to_the_usual_order() {
-        let chosen = choose_video_mode_at_rate(FORMATS_1080P30_ONLY, Some(60)).unwrap();
+    fn a_real_tv_gets_what_the_user_asks_for() {
+        // As reported by a Samsung AU7172 TV.
+        let cases = [
+            (wish(None, None), (1080, 30)),
+            (wish(None, Some(60)), (1080, 60)),
+            (wish(Some(720), None), (720, 30)),
+            (wish(Some(720), Some(60)), (720, 60)),
+            (wish(Some(1080), Some(30)), (1080, 30)),
+        ];
+        for (preference, expected) in cases {
+            let chosen = closest_video_mode(REAL_TV, preference).unwrap();
+            assert_eq!(
+                (chosen.height, chosen.frame_rate),
+                expected,
+                "{preference:?}"
+            );
+            assert!(chosen.satisfies(preference));
+        }
+    }
+
+    #[test]
+    fn an_unsupported_wish_falls_back_to_the_closest_format() {
+        let only_1080p30 = FORMATS_1080P30_ONLY;
+        let chosen = closest_video_mode(only_1080p30, wish(None, Some(60))).unwrap();
         assert_eq!((chosen.height, chosen.frame_rate), (1080, 30));
+        assert!(!chosen.satisfies(wish(None, Some(60))));
+
+        let chosen = closest_video_mode(only_1080p30, wish(Some(720), None)).unwrap();
+        assert_eq!(chosen.height, 1080);
+
+        // Keeps the size when only the rate cannot be had.
+        let only_720p30 = "00 00 01 01 00000020 00000000 00000000 00 0000 0000 00 none none";
+        let chosen = closest_video_mode(only_720p30, wish(Some(720), Some(60))).unwrap();
+        assert_eq!((chosen.height, chosen.frame_rate), (720, 30));
+    }
+
+    #[test]
+    fn a_tv_without_any_usable_format_gets_nothing() {
+        assert_eq!(closest_video_mode("none", wish(Some(720), Some(60))), None);
+    }
+
+    #[test]
+    fn level_names_match_what_the_encoder_is_told() {
+        let smooth = closest_video_mode(REAL_TV, wish(None, Some(60))).unwrap();
+        assert_eq!(smooth.level_name(), "4.2");
     }
 
     #[test]

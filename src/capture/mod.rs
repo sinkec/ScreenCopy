@@ -4,3 +4,4 @@ pub mod monitor;
 pub mod recorder;
 pub mod stream;
 pub mod stream_stats;
+pub mod thumbnail;

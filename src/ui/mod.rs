@@ -1,8 +1,10 @@
 //! GTK4/libadwaita user interface.
 
 pub mod about;
+mod monitor_picker;
 mod recording;
 pub mod splash;
+mod tray;
 mod tv;
 pub mod window;
 

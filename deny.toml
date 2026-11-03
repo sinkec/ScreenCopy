@@ -1,3 +1,12 @@
+[advisories]
+# These are "no longer maintained as a standalone crate", not vulnerabilities: zbus 6
+# absorbed them. The tray library `ksni` needs zbus 5, so they stay until it moves on.
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: needed by ksni through zbus 5" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: needed by ksni through zbus 5" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: needed by ksni through zbus 5" },
+]
+
 [licenses]
 allow = [
     "Apache-2.0",

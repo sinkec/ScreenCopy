@@ -1,7 +1,7 @@
 //! Test recording of the selected monitor, with a preview and a visible
 //! indicator for as long as the screen is being captured.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -21,9 +21,11 @@ pub struct Recording {
     selected: Rc<RefCell<Option<Monitor>>>,
     /// Widgets that must not change while capturing.
     locked: Vec<gtk::Widget>,
+    active: Rc<Cell<bool>>,
     banner: adw::Banner,
     record: gtk::Button,
     preview: gtk::Picture,
+    show_preview: Box<dyn Fn(bool)>,
     toasts: adw::ToastOverlay,
     recorder: RefCell<Option<Recorder>>,
 }
@@ -31,6 +33,10 @@ pub struct Recording {
 /// The widgets `Recording` needs from the window that hosts it.
 pub struct RecordingWidgets {
     pub group: adw::PreferencesGroup,
+    pub preview: gtk::Picture,
+    /// Called with whether the preview should take the monitors' place.
+    pub show_preview: Box<dyn Fn(bool)>,
+    pub active: Rc<Cell<bool>>,
     pub window: adw::ApplicationWindow,
     pub banner: adw::Banner,
     pub toasts: adw::ToastOverlay,
@@ -45,26 +51,22 @@ impl Recording {
             .label("Record…")
             .valign(gtk::Align::Center)
             .build();
-        let preview = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Contain)
-            .height_request(200)
-            .visible(false)
-            .build();
         let group = widgets.group;
         group.set_title("Test Recording");
         group.set_description(Some(
             "Record the selected monitor to a video file, without a TV.",
         ));
         group.set_header_suffix(Some(&record));
-        group.add(&preview);
 
         let this = Rc::new(Self {
             window: widgets.window,
             selected,
             locked: widgets.locked,
+            active: widgets.active,
             banner: widgets.banner,
             record,
-            preview,
+            preview: widgets.preview,
+            show_preview: widgets.show_preview,
             toasts: widgets.toasts,
             recorder: RefCell::default(),
         });
@@ -176,6 +178,7 @@ impl Recording {
     }
 
     fn show_active(&self, monitor: &Monitor) {
+        self.active.set(true);
         self.banner
             .set_title(&format!("Recording monitor {}", monitor.name()));
         self.banner.set_button_label(Some("Stop"));
@@ -184,9 +187,10 @@ impl Recording {
     }
 
     fn show_idle(&self) {
+        self.active.set(false);
         self.banner.set_revealed(false);
         self.preview.set_paintable(gdk::Paintable::NONE);
-        self.preview.set_visible(false);
+        (self.show_preview)(false);
         self.set_controls_enabled(true);
     }
 
@@ -216,12 +220,12 @@ impl Recording {
             let texture = gdk::MemoryTexture::new(
                 frame.width,
                 frame.height,
-                gdk::MemoryFormat::R8g8b8a8,
+                gdk::MemoryFormat::R8g8b8x8,
                 &frame.data,
                 frame.stride,
             );
             self.preview.set_paintable(Some(&texture));
-            self.preview.set_visible(true);
+            (self.show_preview)(true);
         }
         glib::ControlFlow::Continue
     }

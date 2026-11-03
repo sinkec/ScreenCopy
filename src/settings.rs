@@ -1,13 +1,23 @@
 //! Saved user settings, in a private file in the XDG configuration directory.
 
+use std::cell::Cell;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use tracing::warn;
 
 const SOUND_DELAY_KEY: &str = "sound_delay_ms";
+const VIDEO_HEIGHT_KEY: &str = "video_height";
+const FRAME_RATE_KEY: &str = "frame_rate";
+const THEME_KEY: &str = "theme";
+const CLOSE_TO_TRAY_KEY: &str = "close_to_tray";
+const TRAY_NOTICE_KEY: &str = "tray_notice_shown";
+/// The choices the window offers.
+pub const VIDEO_HEIGHTS: [u32; 2] = [1080, 720];
+pub const FRAME_RATES: [u32; 2] = [30, 60];
 const MAX_FILE_LENGTH: usize = 4096;
 /// A larger difference is not a matter of synchronization, and a TV may not
 /// buffer more than this.
@@ -18,9 +28,56 @@ pub const MAX_SOUND_DELAY_MS: i32 = 500;
 pub const MIN_SOUND_DELAY_MS: i32 = -100;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    fn name(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    fn from_name(name: &str) -> Self {
+        match name {
+            "light" => Self::Light,
+            "dark" => Self::Dark,
+            _ => Self::System,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     /// Positive plays the sound later, negative plays the picture later.
     pub sound_delay_ms: i32,
+    /// The picture height to ask the TV for. `None` means the recommended one.
+    pub video_height: Option<u32>,
+    /// The frame rate to ask the TV for. `None` means the recommended one.
+    pub frame_rate: Option<u32>,
+    pub theme: Theme,
+    /// Whether closing the window leaves the program running in the tray.
+    pub close_to_tray: bool,
+    pub tray_notice_shown: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            sound_delay_ms: 0,
+            video_height: None,
+            frame_rate: None,
+            theme: Theme::default(),
+            close_to_tray: true,
+            tray_notice_shown: false,
+        }
+    }
 }
 
 impl Settings {
@@ -42,19 +99,71 @@ impl Settings {
         }
     }
 
+    /// Anything unknown or out of range keeps its default.
     fn parse(text: &str) -> Self {
-        let sound_delay_ms = text
-            .lines()
-            .filter_map(|line| line.split_once('='))
-            .find(|(key, _)| key.trim() == SOUND_DELAY_KEY)
-            .and_then(|(_, value)| value.trim().parse::<i32>().ok())
-            .unwrap_or(0)
-            .clamp(MIN_SOUND_DELAY_MS, MAX_SOUND_DELAY_MS);
-        Self { sound_delay_ms }
+        let value = |key: &str| {
+            text.lines()
+                .filter_map(|line| line.split_once('='))
+                .find(|(name, _)| name.trim() == key)
+                .map(|(_, value)| value.trim())
+        };
+        let flag =
+            |key: &str, default: bool| value(key).and_then(|v| v.parse().ok()).unwrap_or(default);
+        let allowed = |key: &str, choices: &[u32]| {
+            value(key)
+                .and_then(|v| v.parse().ok())
+                .filter(|number| choices.contains(number))
+        };
+        let defaults = Self::default();
+        Self {
+            sound_delay_ms: value(SOUND_DELAY_KEY)
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0)
+                .clamp(MIN_SOUND_DELAY_MS, MAX_SOUND_DELAY_MS),
+            video_height: allowed(VIDEO_HEIGHT_KEY, &VIDEO_HEIGHTS),
+            frame_rate: allowed(FRAME_RATE_KEY, &FRAME_RATES),
+            theme: value(THEME_KEY).map_or(defaults.theme, Theme::from_name),
+            close_to_tray: flag(CLOSE_TO_TRAY_KEY, defaults.close_to_tray),
+            tray_notice_shown: flag(TRAY_NOTICE_KEY, defaults.tray_notice_shown),
+        }
     }
 
     fn format(&self) -> String {
-        format!("{SOUND_DELAY_KEY}={}\n", self.sound_delay_ms)
+        let mut text = format!(
+            "{SOUND_DELAY_KEY}={}\n{THEME_KEY}={}\n{CLOSE_TO_TRAY_KEY}={}\n{TRAY_NOTICE_KEY}={}\n",
+            self.sound_delay_ms,
+            self.theme.name(),
+            self.close_to_tray,
+            self.tray_notice_shown,
+        );
+        if let Some(height) = self.video_height {
+            text.push_str(&format!("{VIDEO_HEIGHT_KEY}={height}\n"));
+        }
+        if let Some(rate) = self.frame_rate {
+            text.push_str(&format!("{FRAME_RATE_KEY}={rate}\n"));
+        }
+        text
+    }
+}
+
+/// The settings shared by the parts of the window. Every change is saved at once.
+#[derive(Debug, Clone)]
+pub struct SettingsStore(Rc<Cell<Settings>>);
+
+impl SettingsStore {
+    pub fn load() -> Self {
+        Self(Rc::new(Cell::new(Settings::load())))
+    }
+
+    pub fn get(&self) -> Settings {
+        self.0.get()
+    }
+
+    pub fn update(&self, change: impl FnOnce(&mut Settings)) {
+        let mut settings = self.0.get();
+        change(&mut settings);
+        self.0.set(settings);
+        settings.save();
     }
 }
 
@@ -97,8 +206,17 @@ mod tests {
     fn settings_round_trip() {
         let settings = Settings {
             sound_delay_ms: -80,
+            video_height: Some(720),
+            frame_rate: Some(60),
+            theme: Theme::Dark,
+            close_to_tray: false,
+            tray_notice_shown: true,
         };
         assert_eq!(Settings::parse(&settings.format()), settings);
+        assert_eq!(
+            Settings::parse(&Settings::default().format()),
+            Settings::default()
+        );
     }
 
     #[test]
@@ -109,6 +227,11 @@ mod tests {
             "sound_delay_ms=abc",
             "sound_delay_ms=",
             "other=5",
+            "video_height=abc",
+            "video_height=4320",
+            "frame_rate=999",
+            "theme=purple",
+            "close_to_tray=maybe",
         ] {
             assert_eq!(Settings::parse(text), Settings::default(), "{text:?}");
         }
@@ -121,6 +244,13 @@ mod tests {
             Settings::parse("sound_delay_ms=-99999").sound_delay_ms,
             MIN_SOUND_DELAY_MS
         );
+    }
+
+    #[test]
+    fn closing_to_the_tray_is_on_by_default() {
+        assert!(Settings::default().close_to_tray);
+        assert!(Settings::parse("").close_to_tray);
+        assert!(!Settings::parse("close_to_tray=false").close_to_tray);
     }
 
     #[test]

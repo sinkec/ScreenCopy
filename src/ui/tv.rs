@@ -15,11 +15,21 @@ use crate::capture::monitor::Monitor;
 use crate::capture::recorder::Encoder;
 use crate::firewall;
 use crate::p2p::{P2pClient, P2pError, P2pLink, Peer, SEARCH_SECONDS};
-use crate::settings::{MAX_SOUND_DELAY_MS, MIN_SOUND_DELAY_MS, Settings};
+use crate::settings::{
+    FRAME_RATES, MAX_SOUND_DELAY_MS, MIN_SOUND_DELAY_MS, SettingsStore, VIDEO_HEIGHTS,
+};
+use crate::wfd::params::VideoPreference;
 use crate::wfd::session::{SessionEvent, Sound};
 use crate::wfd::{self, ServeConfig, ServeEvent};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+/// Room for this many TVs without scrolling.
+const TVS_WITHOUT_SCROLLING: usize = 2;
+const TV_LIST_HEIGHT: i32 = 120;
+/// Two lines of text. The longest status needs them, and the shorter ones must
+/// not make the content below move.
+const STATUS_HEIGHT: i32 = 40;
+const STATUS_LINES: i32 = 2;
 const SOUND_DELAY_STEP_MS: f64 = 10.0;
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SEARCH_DESCRIPTION: &str = "Turn on Screen Mirroring on the TV, then search for it.";
@@ -27,6 +37,10 @@ const SEARCH_DESCRIPTION: &str = "Turn on Screen Mirroring on the TV, then searc
 /// The widgets `TvPanel` needs from the window that hosts it.
 pub struct TvWidgets {
     pub group: adw::PreferencesGroup,
+    pub picture_group: adw::PreferencesGroup,
+    pub settings: SettingsStore,
+    /// Called when sharing starts and ends.
+    pub on_sharing: Box<dyn Fn(bool)>,
     pub window: adw::ApplicationWindow,
     pub banner: adw::Banner,
     pub toasts: adw::ToastOverlay,
@@ -38,7 +52,10 @@ pub struct TvPanel {
     widgets: TvWidgets,
     selected: Rc<RefCell<Option<Monitor>>>,
     list: gtk::ListBox,
+    status: gtk::Label,
     search: gtk::Button,
+    resolution: adw::ComboRow,
+    frame_rate: adw::ComboRow,
     client: RefCell<Option<Rc<P2pClient>>>,
     shown_peers: RefCell<Vec<Peer>>,
     /// Lets a running search notice that it was replaced or cancelled.
@@ -63,20 +80,82 @@ impl TvPanel {
             .visible(false)
             .build();
         widgets.group.set_title("TV");
-        widgets.group.set_description(Some(SEARCH_DESCRIPTION));
         widgets.group.set_header_suffix(Some(&search));
-        let settings = Settings::load();
-        let sound_delay_ms = Arc::new(AtomicI32::new(settings.sound_delay_ms));
-        widgets
-            .group
-            .add(&sound_delay_row(settings, Arc::clone(&sound_delay_ms)));
-        widgets.group.add(&list);
+        let resolution = choice_row(
+            "Resolution",
+            "Recommended",
+            &VIDEO_HEIGHTS,
+            |height| format!("{height}p"),
+            widgets.settings.get().video_height,
+        );
+        let frame_rate = choice_row(
+            "Frame Rate",
+            "Recommended (30 fps)",
+            &FRAME_RATES,
+            |rate| {
+                if rate == 60 {
+                    "60 fps (can stutter more)".to_owned()
+                } else {
+                    format!("{rate} fps")
+                }
+            },
+            widgets.settings.get().frame_rate,
+        );
+        let settings = widgets.settings.clone();
+        resolution.connect_selected_notify(move |row| {
+            let choice = chosen(row, &VIDEO_HEIGHTS);
+            settings.update(|settings| settings.video_height = choice);
+        });
+        let settings = widgets.settings.clone();
+        frame_rate.connect_selected_notify(move |row| {
+            let choice = chosen(row, &FRAME_RATES);
+            settings.update(|settings| settings.frame_rate = choice);
+        });
+        let sound_delay_ms = Arc::new(AtomicI32::new(widgets.settings.get().sound_delay_ms));
+        widgets.picture_group.set_title("Picture and Sound");
+        widgets.picture_group.add(&resolution);
+        widgets.picture_group.add(&frame_rate);
+        widgets.picture_group.add(&sound_delay_row(
+            widgets.settings.clone(),
+            Arc::clone(&sound_delay_ms),
+        ));
+        // TV names come over the air, so the status is not markup. A very small
+        // natural width keeps a long text from widening the column.
+        let status = gtk::Label::builder()
+            .label(SEARCH_DESCRIPTION)
+            .use_markup(false)
+            .xalign(0.0)
+            .valign(gtk::Align::Start)
+            .wrap(true)
+            .lines(STATUS_LINES)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(1)
+            .height_request(STATUS_HEIGHT)
+            .css_classes(["dim-label"])
+            .build();
+        // Room for two TVs. Any more scroll within this space, so that the window
+        // keeps its size.
+        let list_space = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            // Always visible when needed, or further TVs could go unnoticed.
+            .overlay_scrolling(false)
+            .min_content_height(TV_LIST_HEIGHT)
+            .max_content_height(TV_LIST_HEIGHT)
+            .child(&list)
+            .build();
+        let tv_area = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        tv_area.append(&status);
+        tv_area.append(&list_space);
+        widgets.group.add(&tv_area);
 
         let this = Rc::new(Self {
             widgets,
             selected,
             list,
+            status,
             search,
+            resolution,
+            frame_rate,
             client: RefCell::default(),
             shown_peers: RefCell::default(),
             search_generation: Cell::new(0),
@@ -91,13 +170,14 @@ impl TvPanel {
             glib::spawn_future_local(async move { panel.run_search().await });
         });
         let panel = Rc::clone(&this);
-        this.widgets.banner.connect_button_clicked(move |banner| {
-            if let Some(stop) = panel.stop.borrow().as_ref() {
-                banner.set_title("Stopping…");
-                banner.set_button_label(None);
-                stop.store(true, Ordering::Relaxed);
-            }
-        });
+        this.widgets
+            .banner
+            .connect_button_clicked(move |_| panel.request_stop());
+        let panel = Rc::clone(&this);
+        let stop_action = gio::ActionEntry::builder("stop-sharing")
+            .activate(move |_: &adw::ApplicationWindow, _, _| panel.request_stop())
+            .build();
+        this.widgets.window.add_action_entries([stop_action]);
         // A session must end properly before the program exits: the sound
         // settings are put back by its thread.
         let panel = Rc::clone(&this);
@@ -125,7 +205,7 @@ impl TvPanel {
     }
 
     fn describe(&self, text: &str) {
-        self.widgets.group.set_description(Some(text));
+        self.status.set_text(text);
     }
 
     async fn run_search(self: Rc<Self>) {
@@ -142,12 +222,7 @@ impl TvPanel {
                 // A newer search or a session has taken over the panel.
                 if self.search_generation.get() == generation {
                     self.search.set_sensitive(true);
-                    let found = !self.shown_peers.borrow().is_empty();
-                    self.describe(if found {
-                        "Choose the TV to share with."
-                    } else {
-                        "No TV found. Is Screen Mirroring on?"
-                    });
+                    self.describe(&search_result(self.shown_peers.borrow().len()));
                 }
             }
             Err(err) => {
@@ -205,6 +280,8 @@ impl TvPanel {
         let row = adw::ActionRow::builder()
             .use_markup(false)
             .title(&peer.name)
+            .title_lines(1)
+            .tooltip_text(&peer.name)
             .subtitle(if peer.info.available { "Ready" } else { "Busy" })
             .build();
         row.add_suffix(&share);
@@ -218,8 +295,18 @@ impl TvPanel {
         });
     }
 
+    fn request_stop(&self) {
+        if let Some(stop) = self.stop.borrow().as_ref() {
+            self.widgets.banner.set_title("Stopping…");
+            self.widgets.banner.set_button_label(None);
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
+
     fn set_controls_enabled(&self, enabled: bool) {
         self.search.set_sensitive(enabled);
+        self.resolution.set_sensitive(enabled);
+        self.frame_rate.set_sensitive(enabled);
         self.list.set_sensitive(enabled);
         for widget in &self.widgets.locked {
             widget.set_sensitive(enabled);
@@ -246,8 +333,10 @@ impl TvPanel {
         banner.set_title(&format!("Preparing to share with {}…", peer.name));
         banner.set_button_label(Some("Stop"));
         banner.set_revealed(true);
+        (self.widgets.on_sharing)(true);
 
         let result = self.run_session(&peer, &monitor, stop).await;
+        (self.widgets.on_sharing)(false);
         self.widgets.banner.set_revealed(false);
         self.stop.replace(None);
         if self.close_requested.get() {
@@ -326,12 +415,18 @@ impl TvPanel {
         encoder: Encoder,
         stop: Arc<AtomicBool>,
     ) -> Result<(), String> {
+        let settings = self.widgets.settings.get();
+        let preference = VideoPreference {
+            height: settings.video_height,
+            frame_rate: settings.frame_rate,
+        };
         let config = ServeConfig {
             interface: link.interface.clone(),
             local_address: link.local_address,
             region: monitor.capture_region(),
             encoder,
             sound_delay_ms: Arc::clone(&self.sound_delay_ms),
+            video_preference: preference,
         };
         let (sender, events) = mpsc::channel();
         std::thread::Builder::new()
@@ -357,6 +452,12 @@ impl TvPanel {
                         "Sharing at {} × {}, {} frames per second.",
                         mode.width, mode.height, mode.frame_rate
                     ));
+                    if !mode.satisfies(preference) {
+                        self.show_toast(&format!(
+                            "The TV does not offer the chosen format, so it uses {}p at {} fps.",
+                            mode.height, mode.frame_rate
+                        ));
+                    }
                     match sound {
                         Sound::System => {}
                         Sound::Silent => self.show_toast(
@@ -369,9 +470,7 @@ impl TvPanel {
                 }
                 Ok(ServeEvent::Session(SessionEvent::Stats(stats))) => {
                     self.describe(&format!(
-                        "Measured: {} frames captured, {} sent per second. \
-                         Longest pause {} ms, at {:.1} Mbit/s.",
-                        stats.captured_fps,
+                        "Sharing: {} fps, longest pause {} ms, {:.1} Mbit/s.",
                         stats.encoded_fps,
                         stats
                             .longest_capture_gap_ms
@@ -394,9 +493,45 @@ impl TvPanel {
     }
 }
 
+/// What to say when a search has ended.
+fn search_result(found: usize) -> String {
+    match found {
+        0 => "No TV found. Is Screen Mirroring on?".to_owned(),
+        found if found <= TVS_WITHOUT_SCROLLING => "Choose the TV to share with.".to_owned(),
+        found => format!("{found} TVs found. Scroll the list to see them all."),
+    }
+}
+
+/// A list with the recommended choice first and `current` selected.
+fn choice_row(
+    title: &str,
+    recommended: &str,
+    choices: &[u32],
+    label: impl Fn(u32) -> String,
+    current: Option<u32>,
+) -> adw::ComboRow {
+    let mut labels = vec![recommended.to_owned()];
+    labels.extend(choices.iter().copied().map(label));
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let row = adw::ComboRow::builder()
+        .title(title)
+        .model(&gtk::StringList::new(&labels))
+        .build();
+    let position = current.and_then(|value| choices.iter().position(|choice| *choice == value));
+    // A list this short always fits: position 0 is the recommended choice.
+    row.set_selected(position.map_or(0, |position| position as u32 + 1));
+    row
+}
+
+/// The value of the selected entry, or `None` for the recommended one.
+fn chosen(row: &adw::ComboRow, choices: &[u32]) -> Option<u32> {
+    let position = usize::try_from(row.selected()).ok()?.checked_sub(1)?;
+    choices.get(position).copied()
+}
+
 /// Lets the user match the sound to the picture while watching. It stays
 /// available during a session, and takes effect at once.
-fn sound_delay_row(settings: Settings, delay: Arc<AtomicI32>) -> adw::SpinRow {
+fn sound_delay_row(settings: SettingsStore, delay: Arc<AtomicI32>) -> adw::SpinRow {
     let row = adw::SpinRow::with_range(
         f64::from(MIN_SOUND_DELAY_MS),
         f64::from(MAX_SOUND_DELAY_MS),
@@ -404,12 +539,26 @@ fn sound_delay_row(settings: Settings, delay: Arc<AtomicI32>) -> adw::SpinRow {
     );
     row.set_title("Sound Delay (ms)");
     row.set_subtitle("Raise it if sound comes before the picture, lower it if after.");
-    row.set_value(f64::from(settings.sound_delay_ms));
+    row.set_value(f64::from(settings.get().sound_delay_ms));
     row.connect_value_notify(move |row| {
         // The range above makes this conversion lossless.
         let sound_delay_ms = row.value().round() as i32;
         delay.store(sound_delay_ms, Ordering::Relaxed);
-        Settings { sound_delay_ms }.save();
+        settings.update(|settings| settings.sound_delay_ms = sound_delay_ms);
     });
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_search_result_mentions_tvs_hidden_by_scrolling() {
+        assert!(search_result(0).contains("No TV"));
+        assert!(search_result(1).contains("Choose"));
+        assert!(search_result(TVS_WITHOUT_SCROLLING).contains("Choose"));
+        assert!(search_result(3).contains("3 TVs"));
+        assert!(search_result(3).contains("Scroll"));
+    }
 }

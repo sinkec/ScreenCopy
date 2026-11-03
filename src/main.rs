@@ -28,8 +28,12 @@ fn main() -> glib::ExitCode {
     let app = adw::Application::builder()
         .application_id(ui::APP_ID)
         .build();
-    app.connect_startup(|_| ui::window::prepare_icons());
-    app.connect_activate(|app| match app.active_window() {
+    app.connect_startup(|_| {
+        ui::window::prepare_icons();
+        ui::window::prepare_theme();
+    });
+    // A window hidden in the tray counts too: starting the program again shows it.
+    app.connect_activate(|app| match app.windows().first() {
         Some(window) => window.present(),
         None => {
             let app_for_window = app.clone();
@@ -42,9 +46,9 @@ fn main() -> glib::ExitCode {
     app.run()
 }
 
-/// Closing the window ends a running session properly, which puts the sound
-/// settings back. Without this, Ctrl+C or logging out would leave that to the
-/// next start of the program.
+/// Quitting ends a running session properly, which puts the sound settings back.
+/// Without this, Ctrl+C or logging out would leave that to the next start of the
+/// program.
 fn close_window_on_signals(app: &adw::Application) -> std::io::Result<()> {
     let requested = Arc::new(AtomicBool::new(false));
     for signal in [SIGINT, SIGTERM] {
@@ -53,9 +57,11 @@ fn close_window_on_signals(app: &adw::Application) -> std::io::Result<()> {
     let app = app.clone();
     glib::timeout_add_local(SIGNAL_POLL_INTERVAL, move || {
         if requested.swap(false, Ordering::Relaxed) {
-            match app.active_window() {
-                Some(window) => window.close(),
-                None => app.quit(),
+            if app.lookup_action("quit").is_some() {
+                app.activate_action("quit", None);
+            } else {
+                // Only the splash screen exists so far.
+                app.quit();
             }
         }
         glib::ControlFlow::Continue

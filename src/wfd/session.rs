@@ -10,7 +10,7 @@ use thiserror::Error;
 use tracing::{debug, info, warn};
 
 use super::params::{
-    VideoMode, choose_video_mode, parse_client_rtp_port, parse_parameters,
+    VideoMode, VideoPreference, choose_video_mode_for, parse_client_rtp_port, parse_parameters,
     parse_transport_client_port, supports_aac,
 };
 use super::rtsp::{self, Message, ParseError, StartLine};
@@ -129,6 +129,7 @@ struct Session<'a, M: MediaStream> {
     pending: Option<(u32, Pending)>,
     options_answered: bool,
     sink_options_received: bool,
+    preference: VideoPreference,
     mode: Option<VideoMode>,
     with_audio: bool,
     rtp_port: Option<u16>,
@@ -144,6 +145,7 @@ pub fn run(
     local_address: Ipv4Addr,
     peer_address: Ipv4Addr,
     media: &mut impl MediaStream,
+    preference: VideoPreference,
     stop: &AtomicBool,
     on_event: &mut impl FnMut(SessionEvent),
 ) -> Result<(), SessionError> {
@@ -160,6 +162,7 @@ pub fn run(
         pending: None,
         options_answered: false,
         sink_options_received: false,
+        preference,
         mode: None,
         with_audio: false,
         rtp_port: None,
@@ -329,7 +332,8 @@ impl<M: MediaStream> Session<'_, M> {
         let formats = parameters
             .get("wfd_video_formats")
             .ok_or(SessionError::Missing("its video formats"))?;
-        let mode = choose_video_mode(formats).ok_or(SessionError::NoVideoFormat)?;
+        let mode =
+            choose_video_mode_for(formats, self.preference).ok_or(SessionError::NoVideoFormat)?;
         info!(tv_formats = %formats, ?mode, "chose a video format");
         let port = parameters
             .get("wfd_client_rtp_ports")
@@ -646,9 +650,17 @@ mod tests {
         let (connection, _) = listener.accept().unwrap();
         let mut media = media;
         let mut events = Vec::new();
-        let result = run(connection, LOCAL, LOCAL, &mut media, &stop, &mut |event| {
-            events.push(event);
-        });
+        let result = run(
+            connection,
+            LOCAL,
+            LOCAL,
+            &mut media,
+            VideoPreference::default(),
+            &stop,
+            &mut |event| {
+                events.push(event);
+            },
+        );
         tv_thread.join().unwrap();
         Outcome {
             result,

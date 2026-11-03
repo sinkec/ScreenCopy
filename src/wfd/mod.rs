@@ -18,6 +18,7 @@ use crate::capture::monitor::CaptureRegion;
 use crate::capture::recorder::Encoder;
 use crate::capture::stream::ScreenStream;
 use crate::firewall::{FirewallError, FirewallSession};
+use params::VideoPreference;
 use session::{SessionError, SessionEvent};
 
 const RTSP_PORT: u16 = 7236;
@@ -44,6 +45,7 @@ pub struct ServeConfig {
     pub region: CaptureRegion,
     pub encoder: Encoder,
     pub sound_delay_ms: Arc<AtomicI32>,
+    pub video_preference: VideoPreference,
 }
 
 #[derive(Debug)]
@@ -90,6 +92,7 @@ fn serve_session(
         config.local_address,
         peer_address,
         &mut media,
+        config.video_preference,
         stop,
         &mut |event| {
             if events.send(ServeEvent::Session(event)).is_err() {

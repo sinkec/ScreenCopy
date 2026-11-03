@@ -16,7 +16,7 @@ use gtk::glib;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 use zbus::proxy::CacheProperties;
-use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 use crate::firewall::protocol::is_valid_p2p_interface;
 use wfd_ie::{DeviceInfo, parse_device_info};
@@ -47,6 +47,8 @@ const MAX_NAME_CHARACTERS: usize = 64;
 pub enum P2pError {
     #[error("cannot talk to NetworkManager: {0}")]
     Bus(#[from] zbus::Error),
+    #[error("NetworkManager refused the request: {0}")]
+    Refused(#[from] zbus::fdo::Error),
     #[error("this computer has no Wi-Fi Direct device")]
     NoDevice,
     #[error("the device reported an invalid hardware address")]
@@ -106,7 +108,7 @@ impl P2pClient {
     }
 
     pub async fn start_search(&self) -> Result<(), P2pError> {
-        let options = HashMap::from([("timeout", Variant::from(SEARCH_SECONDS))]);
+        let options = HashMap::from([("timeout", Value::from(SEARCH_SECONDS))]);
         let _: () = self
             .device_p2p()
             .await?
@@ -168,15 +170,15 @@ impl P2pClient {
     pub async fn connect(&self, peer: &Peer, cancel: &AtomicBool) -> Result<P2pLink, P2pError> {
         let settings = connection_settings(&peer.hw_address, glib::user_name().to_str());
         let options = HashMap::from([
-            ("persist", Variant::from("volatile")),
+            ("persist", Value::from("volatile")),
             // NetworkManager ends the connection when this program disappears.
-            ("bind-activation", Variant::from("dbus-client")),
+            ("bind-activation", Value::from("dbus-client")),
         ]);
         let manager = proxy(&self.connection, NM_PATH, NM_MANAGER).await?;
         let (_, active, _): (
             OwnedObjectPath,
             OwnedObjectPath,
-            HashMap<String, OwnedVariant>,
+            HashMap<String, OwnedValue>,
         ) = manager
             .call(
                 "AddAndActivateConnection2",
@@ -253,7 +255,7 @@ impl P2pClient {
         let connection = proxy(&self.connection, active.as_str(), NM_ACTIVE).await?;
         let config: OwnedObjectPath = connection.get_property("Ip4Config").await?;
         let config = proxy(&self.connection, config.as_str(), NM_IP4).await?;
-        let addresses: Vec<HashMap<String, OwnedVariant>> =
+        let addresses: Vec<HashMap<String, OwnedValue>> =
             config.get_property("AddressData").await?;
         let Some(local_address) = first_ipv4_address(&addresses) else {
             self.deactivate(&active).await;
@@ -294,9 +296,9 @@ async fn proxy<'a>(
 ) -> Result<zbus::Proxy<'a>, P2pError> {
     // Without a cache, properties are always current and no signals are needed.
     Ok(zbus::proxy::Builder::new(connection)
-        .destination(NM_SERVICE)
-        .path(path)
-        .interface(interface)
+        .destination(NM_SERVICE)?
+        .path(path)?
+        .interface(interface)?
         .cache_properties(CacheProperties::No)
         .build()
         .await?)
@@ -305,44 +307,44 @@ async fn proxy<'a>(
 fn connection_settings<'a>(
     hw_address: &'a str,
     user: Option<&str>,
-) -> HashMap<&'static str, HashMap<&'static str, Variant<'a>>> {
+) -> HashMap<&'static str, HashMap<&'static str, Value<'a>>> {
     let mut general = HashMap::from([
-        ("id", Variant::from("ScreenCopy")),
-        ("type", Variant::from("wifi-p2p")),
-        ("autoconnect", Variant::from(false)),
+        ("id", Value::from("ScreenCopy")),
+        ("type", Value::from("wifi-p2p")),
+        ("autoconnect", Value::from(false)),
     ]);
     // Limits the connection to this user, so it needs no administrator rights.
     if let Some(user) = user {
-        general.insert("permissions", Variant::from(vec![format!("user:{user}:")]));
+        general.insert("permissions", Value::from(vec![format!("user:{user}:")]));
     }
     HashMap::from([
         ("connection", general),
         (
             "wifi-p2p",
             HashMap::from([
-                ("peer", Variant::from(hw_address)),
-                ("wfd-ies", Variant::from(wfd_ie::SOURCE_IES.to_vec())),
+                ("peer", Value::from(hw_address)),
+                ("wfd-ies", Value::from(wfd_ie::SOURCE_IES.to_vec())),
             ]),
         ),
         (
             "ipv4",
             HashMap::from([
-                ("method", Variant::from("auto")),
+                ("method", Value::from("auto")),
                 // The TV must never become the route to the internet.
-                ("never-default", Variant::from(true)),
+                ("never-default", Value::from(true)),
             ]),
         ),
         (
             "ipv6",
             HashMap::from([
-                ("method", Variant::from("auto")),
-                ("may-fail", Variant::from(true)),
+                ("method", Value::from("auto")),
+                ("may-fail", Value::from(true)),
             ]),
         ),
     ])
 }
 
-fn first_ipv4_address(addresses: &[HashMap<String, OwnedVariant>]) -> Option<Ipv4Addr> {
+fn first_ipv4_address(addresses: &[HashMap<String, OwnedValue>]) -> Option<Ipv4Addr> {
     addresses.iter().find_map(|entry| {
         let address = entry.get("address")?.downcast_ref::<&str>().ok()?;
         address.parse().ok()
@@ -423,17 +425,17 @@ mod tests {
     #[test]
     fn settings_describe_a_volatile_safe_connection() {
         let settings = connection_settings(ADDRESS, Some("someone"));
-        assert_eq!(settings["wifi-p2p"]["peer"], Variant::from(ADDRESS));
+        assert_eq!(settings["wifi-p2p"]["peer"], Value::from(ADDRESS));
         assert_eq!(
             settings["wifi-p2p"]["wfd-ies"],
-            Variant::from(wfd_ie::SOURCE_IES.to_vec())
+            Value::from(wfd_ie::SOURCE_IES.to_vec())
         );
-        assert_eq!(settings["connection"]["type"], Variant::from("wifi-p2p"));
-        assert_eq!(settings["connection"]["autoconnect"], Variant::from(false));
-        assert_eq!(settings["ipv4"]["never-default"], Variant::from(true));
+        assert_eq!(settings["connection"]["type"], Value::from("wifi-p2p"));
+        assert_eq!(settings["connection"]["autoconnect"], Value::from(false));
+        assert_eq!(settings["ipv4"]["never-default"], Value::from(true));
         assert_eq!(
             settings["connection"]["permissions"],
-            Variant::from(vec!["user:someone:".to_owned()])
+            Value::from(vec!["user:someone:".to_owned()])
         );
     }
 
@@ -448,7 +450,7 @@ mod tests {
         let entry = |address: &str| {
             HashMap::from([(
                 "address".to_owned(),
-                OwnedVariant::try_from(Variant::from(address)).unwrap(),
+                OwnedValue::try_from(Value::from(address)).unwrap(),
             )])
         };
         let addresses = [entry("nonsense"), entry("10.42.0.1"), entry("10.42.0.2")];

@@ -34,7 +34,9 @@ experience on Windows or Apple. Intended for wide use, so it must be safe and re
    the TV is untrusted: length limits, timeouts, robust parsing, no `panic!` on input. Add tests and,
    if possible, fuzz tests for the parser.
 5. Screen capture starts only on an explicit user action. While sharing, a clear indicator (window
-   and/or tray icon) with a "Stop" button is visible.
+   and/or tray icon) with a "Stop" button is visible. The one exception, approved by the user: a single
+   small picture of each monitor when the window opens and on Refresh, so that monitors can be
+   recognized. These stay in memory, and are never saved, sent or repeated in the background.
 6. No telemetry and no network calls other than the connection to the TV. No hidden actions.
 7. No `unsafe` unless it is necessary and justified by a comment.
 8. Minimal dependencies, vetted libraries, `Cargo.lock` in git. Provide `cargo clippy -D warnings`,
@@ -120,40 +122,68 @@ restored on drop or on the next start after a crash. Tests use `FakePactl` and m
 user's real sound system. On this machine a leftover `gnome_network_displays` null sink from GNOME
 Network Displays was the default output; it is not ours, so it is never removed automatically.
 
-## Status and next steps (2026-11-01)
+## Status and next steps (2026-11-03)
 
 Author: Matej Jazbinšek, GitHub user `sinkec`, repository `sinkec/ScreenCopy` (public, branch `main`).
-Everything is pushed. A package built from the current commit is in `target/debian/`; check with `dpkg -l
-screencopy` and compare with `git log` whether the user has installed it before relying on what the
-installed program can do.
+The installed `.deb` may be older than the working tree, so compare before relying on what the installed
+program can do.
 
-Confirmed by the user on the real TV (Samsung AU7172): discovery, connection, firewall with ufw on,
-picture with low delay, sound on the TV, sound returning to the headphones after Stop. Sharing works with no home Wi-Fi on the PC or the
-TV, and paced sending removes most stutter. Installing the
-package with the new app ID worked; polkit knows only the new action.
+Done on 2026-11-03:
+- Monitor picker with real size, position and rotation, and one picture per monitor (rule 5 was amended).
+- Resolution and frame rate choices, Appearance and Keep Running in the Tray under Preferences.
+- Tray icon (`ksni`, `zbus` back on 5, three advisories ignored in `deny.toml`).
+- Fixed window of 970 × 630 without a scrollbar.
+- Pictures were invisible because converting to RGBA gave alpha 0: now RGBx, also for the recording preview.
 
-Sharing with home Wi-Fi connected is confirmed too. The user continues testing. Go through these in order, and after each result
-remove it from the "Not yet confirmed" list in `README.md`:
+Confirmed by the user on the real TV (Samsung AU7172): discovery, connection, firewall with ufw on, picture
+with low delay, sound on the TV, sound returning to the headphones after Stop, sharing with or without home
+Wi-Fi on the PC or the TV, paced sending removing most stutter, the larger send buffer improving the picture.
+On 2026-11-03 also: the tray, stopping the stream, closing the program, Preferences and themes, the Sound
+Delay row, and sound in sync with the picture.
 
-2. Sound Delay row: how it looks, and changing it while sharing. It defaults to 0.
-3. Sync with a video that is in sync on the computer, such as "audio video sync test" on YouTube. A
-   film the user tried on 2026-11-01 was out of sync on the computer too, so it proved nothing about
-   ScreenCopy. If the sound is later than the picture by more than 100 ms, Sound Delay cannot fix it:
-   the stream's clock (PCR) would have to follow the audio instead.
-4. Closing the window while sharing: everything cleans up and the sound returns.
-5. Crash recovery: `pkill -9 -x screencopy` while sharing, then start again. Sound must return, with a
-   notice. Test this only after 4.
-6. Record button: record, Stop, play the file, and check that it shows only the chosen monitor.
-7. Stop while connecting, the About dialog, and the setup dialog when the helper is missing.
+Still to check with the user, in this order. After each result, update the "Not yet confirmed" list in
+`README.md`:
+
+1. The fixed window on the real TV. An earlier build grew during sharing, because the status text changed its
+   natural size. The fix was measured with a test copy using fake TVs (970 × 630 in every state), not yet with
+   a real session. Monitor pictures being recognizable is also unconfirmed.
+2. What the user meant by the Record button appearing "in the tray". The tray's menu has no such item.
+3. Resolution 720p and frame rate 60 on the TV. The fallback message if the TV lacks a format.
+4. Crash recovery: `pkill -9 -x screencopy` while sharing, then start again. Sound must return, with a notice.
+5. Record button: record, Stop, play the file, and check that it shows only the chosen monitor, with the
+   preview in the monitors' place.
+6. Stop while connecting, the About dialog, and the setup dialog when the helper is missing.
 
 After that, ask the user about: a downloadable `.deb` on GitHub Releases (recommended next), GitHub
-Actions for the checks, translations, real fuzz targets. A tray icon was left out on purpose: the
-banner already satisfies rule 5, and it would add dependencies. Flatpak was left out on purpose: the
+Actions for the checks, translations, real fuzz targets. Flatpak was left out on purpose: the
 sandbox conflicts with pkexec, NetworkManager access and X11 capture.
 
 Known on the user's computer: new GTK programs log `Unable to connect to the accessibility bus` until
 the next login (see the project memory). A leftover `gnome_network_displays` null sink from GNOME
 Network Displays may exist; it is not ours, so it is never removed automatically.
+
+## Window and tray
+
+The window has a fixed size, 970 × 630, and must not need a scrollbar, also on a 1366 × 768 screen. Anything
+that appears later must not change its size: banners cover the content, and a recording's preview takes
+the monitors' place. A non-resizable window follows its content's natural size, so a `ScrolledWindow` with
+`External` scrollbars holds the size. It clips anything too tall, so check the content's height after changing the
+layout: it is exactly 630 now. Only the TV list scrolls, from the third TV on, with a visible scrollbar and the
+number of TVs in the status text.
+
+Google Cast finds more devices than Miracast because it uses the home network, while Miracast needs a TV that
+is listening over Wi-Fi Direct. Supporting Cast would be a separate protocol and would need LAN traffic, which
+rule 6 does not allow as written, so it needs the user's decision.
+
+When testing windows, act only on the test process's own window id (see the project memory). Blur any
+screenshot that shows monitor pictures, because they contain the user's screens.
+
+The monitor picker draws monitors in their real size, position and rotation, each with a picture. By
+default, closing the window hides it into the tray (`ksni`), and only the tray's Quit or the window
+menu's Quit ends the program. While sharing, the tray icon changes and offers Stop Sharing, which rule 5
+requires. Without a tray, or during a test recording, closing ends the program as usual. Resolution and
+frame rate are wishes: the TV's list arrives only during negotiation, so the closest format is used and
+the user is told if it differs. `zbus` stays on the major version `ksni` uses, to avoid two copies.
 
 ## Licensing
 
@@ -163,5 +193,7 @@ dependencies, and keep `deny.toml` compatible with GPL-3.0-or-later.
 
 ## Open questions
 
+- `deny.toml` ignores three "unmaintained" advisories for zbus 5 crates (not vulnerabilities), needed by
+  `ksni`. Remove them when `ksni` moves to zbus 6, then move this project back to zbus 6 as well.
 - Real fuzz targets (`cargo-fuzz`) need a nightly toolchain, postponed: the user is not familiar with
   them, and deterministic tests with damaged input cover the parsers for now.
