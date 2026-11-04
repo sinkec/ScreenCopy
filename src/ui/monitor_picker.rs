@@ -22,6 +22,7 @@ const RECORDING_BAR_MARGIN: i32 = 24;
 const CARD_PADDING: i32 = 12;
 const DISPLAY_MONITORS: &str = "monitors";
 const DISPLAY_PREVIEW: &str = "preview";
+const DISPLAY_FILE: &str = "file";
 const MIN_TILE_SIDE: i32 = 32;
 const CHECK_ICON_SIZE: i32 = 12;
 /// Keeps neighbouring monitors visually apart.
@@ -95,6 +96,9 @@ pub struct MonitorPicker {
     pub recording_status: gtk::Label,
     /// Ends the recording, on top of the preview.
     pub recording_stop: gtk::Button,
+    /// The choice between a monitor and a video file.
+    pub monitor_toggle: gtk::ToggleButton,
+    pub file_toggle: gtk::ToggleButton,
     display: gtk::Stack,
     message: adw::StatusPage,
     pub selected: Rc<RefCell<Option<Monitor>>>,
@@ -142,7 +146,20 @@ impl MonitorPicker {
         preview_page.add_overlay(&recording_bar);
         display.add_named(&preview_page, Some(DISPLAY_PREVIEW));
 
-        let section = Section::new("Monitor");
+        let monitor_toggle = gtk::ToggleButton::builder()
+            .label("Monitor")
+            .active(true)
+            .build();
+        let file_toggle = gtk::ToggleButton::builder()
+            .label("Video File")
+            .group(&monitor_toggle)
+            .build();
+        let source_choice = gtk::Box::builder().css_classes(["linked"]).build();
+        source_choice.append(&monitor_toggle);
+        source_choice.append(&file_toggle);
+
+        let section = Section::new("Source");
+        section.set_prefix(&source_choice);
         section.set_content(&display);
 
         let message = adw::StatusPage::builder()
@@ -160,6 +177,8 @@ impl MonitorPicker {
             preview,
             recording_status,
             recording_stop,
+            monitor_toggle,
+            file_toggle,
             display,
             message,
             selected: Rc::default(),
@@ -167,13 +186,35 @@ impl MonitorPicker {
         })
     }
 
-    /// Shows the recording's preview, or the monitors again.
-    pub fn show_preview(&self, showing: bool) {
-        self.display.set_visible_child_name(if showing {
-            DISPLAY_PREVIEW
-        } else {
-            DISPLAY_MONITORS
+    /// Adds what shows when the source is a video file, and starts following the
+    /// choice of source. `refresh` belongs to the monitors, so it goes with them.
+    pub fn attach_file_page(self: &Rc<Self>, page: &impl IsA<gtk::Widget>, refresh: &gtk::Button) {
+        self.display.add_named(page, Some(DISPLAY_FILE));
+        let this = Rc::clone(self);
+        let refresh = refresh.clone();
+        self.file_toggle.connect_toggled(move |toggle| {
+            let file = toggle.is_active();
+            refresh.set_visible(!file);
+            this.section.set_detail_visible(!file);
+            this.display
+                .set_visible_child_name(if file { DISPLAY_FILE } else { DISPLAY_MONITORS });
         });
+    }
+
+    /// Whether a video file is what the TV is to show.
+    pub fn file_is_source(&self) -> bool {
+        self.file_toggle.is_active()
+    }
+
+    /// Shows the recording's preview, or the monitors again. A recording is always
+    /// of a monitor.
+    pub fn show_preview(&self, showing: bool) {
+        if showing {
+            self.monitor_toggle.set_active(true);
+            self.display.set_visible_child_name(DISPLAY_PREVIEW);
+        } else {
+            self.display.set_visible_child_name(DISPLAY_MONITORS);
+        }
     }
 
     /// Reads the monitors and takes new pictures, keeping the selection if the

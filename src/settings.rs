@@ -9,6 +9,8 @@ use std::rc::Rc;
 
 use tracing::warn;
 
+use crate::capture::file_stream::{FilmQuality, SubtitlePosition, SubtitleSize};
+
 const SETTINGS_FILE: &str = "settings";
 const SOUND_DELAY_KEY: &str = "sound_delay_ms";
 const VIDEO_HEIGHT_KEY: &str = "video_height";
@@ -16,6 +18,13 @@ const FRAME_RATE_KEY: &str = "frame_rate";
 const THEME_KEY: &str = "theme";
 const CLOSE_TO_TRAY_KEY: &str = "close_to_tray";
 const TRAY_NOTICE_KEY: &str = "tray_notice_shown";
+const SUBTITLE_SIZE_KEY: &str = "subtitle_size";
+const SUBTITLE_POSITION_KEY: &str = "subtitle_position";
+const FILM_QUALITY_KEY: &str = "film_quality";
+const FILM_VOLUME_KEY: &str = "film_volume_percent";
+/// The film's volume can go above its own level, as speech is often too quiet.
+pub const MAX_FILM_VOLUME_PERCENT: u32 = 150;
+const DEFAULT_FILM_VOLUME_PERCENT: u32 = 100;
 /// The choices the window offers.
 pub const VIDEO_HEIGHTS: [u32; 2] = [1080, 720];
 pub const FRAME_RATES: [u32; 2] = [30, 60];
@@ -66,6 +75,10 @@ pub struct Settings {
     /// Whether closing the window leaves the program running in the tray.
     pub close_to_tray: bool,
     pub tray_notice_shown: bool,
+    pub subtitle_size: SubtitleSize,
+    pub subtitle_position: SubtitlePosition,
+    pub film_quality: FilmQuality,
+    pub film_volume_percent: u32,
 }
 
 impl Default for Settings {
@@ -77,6 +90,10 @@ impl Default for Settings {
             theme: Theme::default(),
             close_to_tray: true,
             tray_notice_shown: false,
+            subtitle_size: SubtitleSize::default(),
+            subtitle_position: SubtitlePosition::default(),
+            film_quality: FilmQuality::default(),
+            film_volume_percent: DEFAULT_FILM_VOLUME_PERCENT,
         }
     }
 }
@@ -126,16 +143,56 @@ impl Settings {
             theme: value(THEME_KEY).map_or(defaults.theme, Theme::from_name),
             close_to_tray: flag(CLOSE_TO_TRAY_KEY, defaults.close_to_tray),
             tray_notice_shown: flag(TRAY_NOTICE_KEY, defaults.tray_notice_shown),
+            subtitle_size: value(SUBTITLE_SIZE_KEY).map_or(
+                defaults.subtitle_size,
+                |name| match name {
+                    "small" => SubtitleSize::Small,
+                    "large" => SubtitleSize::Large,
+                    _ => SubtitleSize::Medium,
+                },
+            ),
+            subtitle_position: if value(SUBTITLE_POSITION_KEY) == Some("higher") {
+                SubtitlePosition::Higher
+            } else {
+                SubtitlePosition::Bottom
+            },
+            film_quality: match value(FILM_QUALITY_KEY) {
+                Some("standard") => FilmQuality::Standard,
+                Some("highest") => FilmQuality::Highest,
+                _ => FilmQuality::High,
+            },
+            film_volume_percent: value(FILM_VOLUME_KEY)
+                .and_then(|v| v.parse().ok())
+                .map_or(DEFAULT_FILM_VOLUME_PERCENT, |volume: u32| {
+                    volume.min(MAX_FILM_VOLUME_PERCENT)
+                }),
         }
     }
 
     fn format(&self) -> String {
         let mut text = format!(
-            "{SOUND_DELAY_KEY}={}\n{THEME_KEY}={}\n{CLOSE_TO_TRAY_KEY}={}\n{TRAY_NOTICE_KEY}={}\n",
+            "{SOUND_DELAY_KEY}={}\n{THEME_KEY}={}\n{CLOSE_TO_TRAY_KEY}={}\n{TRAY_NOTICE_KEY}={}\n\
+             {SUBTITLE_SIZE_KEY}={}\n{SUBTITLE_POSITION_KEY}={}\n\
+             {FILM_QUALITY_KEY}={}\n{FILM_VOLUME_KEY}={}\n",
             self.sound_delay_ms,
             self.theme.name(),
             self.close_to_tray,
             self.tray_notice_shown,
+            match self.subtitle_size {
+                SubtitleSize::Small => "small",
+                SubtitleSize::Medium => "medium",
+                SubtitleSize::Large => "large",
+            },
+            match self.subtitle_position {
+                SubtitlePosition::Bottom => "bottom",
+                SubtitlePosition::Higher => "higher",
+            },
+            match self.film_quality {
+                FilmQuality::Standard => "standard",
+                FilmQuality::High => "high",
+                FilmQuality::Highest => "highest",
+            },
+            self.film_volume_percent,
         );
         if let Some(height) = self.video_height {
             text.push_str(&format!("{VIDEO_HEIGHT_KEY}={height}\n"));
@@ -213,6 +270,10 @@ mod tests {
             theme: Theme::Dark,
             close_to_tray: false,
             tray_notice_shown: true,
+            subtitle_size: SubtitleSize::Large,
+            subtitle_position: SubtitlePosition::Higher,
+            film_quality: FilmQuality::Highest,
+            film_volume_percent: 130,
         };
         assert_eq!(Settings::parse(&settings.format()), settings);
         assert_eq!(
@@ -234,6 +295,8 @@ mod tests {
             "frame_rate=999",
             "theme=purple",
             "close_to_tray=maybe",
+            "film_quality=best",
+            "film_volume_percent=loud",
         ] {
             assert_eq!(Settings::parse(text), Settings::default(), "{text:?}");
         }
@@ -245,6 +308,14 @@ mod tests {
         assert_eq!(
             Settings::parse("sound_delay_ms=-99999").sound_delay_ms,
             MIN_SOUND_DELAY_MS
+        );
+    }
+
+    #[test]
+    fn film_volume_is_limited() {
+        assert_eq!(
+            Settings::parse("film_volume_percent=99999").film_volume_percent,
+            MAX_FILM_VOLUME_PERCENT
         );
     }
 

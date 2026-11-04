@@ -56,6 +56,16 @@ impl Section {
         self.detail.set_text(detail);
     }
 
+    pub fn set_detail_visible(&self, visible: bool) {
+        self.detail.set_opacity(if visible { 1.0 } else { 0.0 });
+    }
+
+    /// Something that comes right after the title.
+    pub fn set_prefix(&self, prefix: &impl IsA<gtk::Widget>) {
+        prefix.set_valign(gtk::Align::Center);
+        self.header.insert_child_after(prefix, Some(&self.title));
+    }
+
     pub fn set_suffix(&self, suffix: &impl IsA<gtk::Widget>) {
         suffix.set_valign(gtk::Align::Center);
         self.header.append(suffix);

@@ -17,7 +17,7 @@ use crate::wfd::session::{MediaStream, Sound, StreamTarget};
 /// Silence, for when the computer's sound cannot be captured: some TVs expect
 /// a stream to carry audio.
 const SILENT_AUDIO_SOURCE: &str = "audiotestsrc is-live=true wave=silence";
-const AAC_ENCODER: &str = "avenc_aac";
+pub(super) const AAC_ENCODER: &str = "avenc_aac";
 const KEY_FRAME_VARIABLE: &str = "MONITORBEAM_KEY_FRAME_DISTANCE";
 const BITRATE_VARIABLE: &str = "MONITORBEAM_BITRATE_KBIT";
 const PACING_VARIABLE: &str = "MONITORBEAM_PACING_MS";
@@ -31,7 +31,8 @@ const CAPTURE_QUEUE: &str = "capture-queue";
 const SENDER: &str = "sender";
 const VIDEO_QUEUE: &str = "video-before-mux";
 /// Often enough to catch a stall, rarely enough to keep the log readable.
-const STATS_INTERVAL: Duration = Duration::from_secs(5);
+pub(super) const BITRATE_VARIABLE_NAME: &str = BITRATE_VARIABLE;
+pub(super) const STATS_INTERVAL: Duration = Duration::from_secs(5);
 const AUDIO_QUEUE: &str = "audio-before-mux";
 
 pub struct ScreenStream {
@@ -89,24 +90,10 @@ impl ScreenStream {
         if self.applied_sound_delay_ms == Some(delay) {
             return;
         }
-        let Some(pipeline) = self
-            .pipeline
-            .as_ref()
-            .and_then(|pipeline| pipeline.downcast_ref::<gst::Bin>())
-        else {
-            return;
-        };
-        let (video_offset, audio_offset) = delay_offsets(delay);
-        for (name, offset) in [(VIDEO_QUEUE, video_offset), (AUDIO_QUEUE, audio_offset)] {
-            if let Some(pad) = pipeline
-                .by_name(name)
-                .and_then(|queue| queue.static_pad("src"))
-            {
-                pad.set_offset(offset);
-            }
+        if let Some(pipeline) = &self.pipeline {
+            apply_delay(pipeline, delay);
+            self.applied_sound_delay_ms = Some(delay);
         }
-        debug!(delay_ms = delay, "applied the sound delay");
-        self.applied_sound_delay_ms = Some(delay);
     }
 
     /// Where the audio comes from. Sharing continues silently if the system's
@@ -122,6 +109,38 @@ impl ScreenStream {
             }
         }
         SILENT_AUDIO_SOURCE.to_owned()
+    }
+}
+
+/// Moves the sound or the picture later in a running pipeline.
+pub(super) fn apply_delay(pipeline: &gst::Element, delay_ms: i32) {
+    let Some(bin) = pipeline.downcast_ref::<gst::Bin>() else {
+        return;
+    };
+    let (video_offset, audio_offset) = delay_offsets(delay_ms);
+    for (name, offset) in [(VIDEO_QUEUE, video_offset), (AUDIO_QUEUE, audio_offset)] {
+        if let Some(pad) = bin.by_name(name).and_then(|queue| queue.static_pad("src")) {
+            pad.set_offset(offset);
+        }
+    }
+    debug!(delay_ms, "applied the sound delay");
+}
+
+/// Measures a pipeline built by `stream_description`.
+pub(super) fn attach_meter(bin: &gst::Bin, report_every: Duration) -> StreamMeter {
+    StreamMeter::attach(bin, CAPTURE_QUEUE, VIDEO_QUEUE, SENDER, report_every)
+}
+
+/// An error or end of a pipeline that should keep running.
+pub(super) fn pipeline_failure(pipeline: &gst::Element) -> Option<String> {
+    let bus = pipeline.bus()?;
+    let message = bus.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])?;
+    match message.view() {
+        gst::MessageView::Error(error) => {
+            warn!(error = %error.error(), debug = ?error.debug(), "stream error");
+            Some(error.error().to_string())
+        }
+        _ => Some("the capture ended unexpectedly".to_owned()),
     }
 }
 
@@ -191,6 +210,18 @@ fn stream_description(
     target: StreamTarget,
     audio_source: Option<&str>,
 ) -> String {
+    let encoder = encoder.description_with(key_frame_distance(), bitrate_override());
+    stream_description_with(&encoder, source, local_address, target, audio_source)
+}
+
+/// `stream_description`, with an encoder description of the caller's own.
+pub(super) fn stream_description_with(
+    encoder: &str,
+    source: &str,
+    local_address: Ipv4Addr,
+    target: StreamTarget,
+    audio_source: Option<&str>,
+) -> String {
     let StreamTarget {
         address,
         port,
@@ -213,7 +244,6 @@ fn stream_description(
         rate = mode.frame_rate,
         width = mode.width,
         height = mode.height,
-        encoder = encoder.description_with(key_frame_distance(), bitrate_override()),
         level = mode.level_name(),
         pacing = pacing_options(pacing_delay_ms()),
     )
@@ -233,13 +263,7 @@ impl MediaStream for ScreenStream {
         debug!(%description, "building stream pipeline");
         let pipeline = gst::parse::launch(&description).map_err(|error| error.to_string())?;
         if let Some(bin) = pipeline.downcast_ref::<gst::Bin>() {
-            self.meter = Some(StreamMeter::attach(
-                bin,
-                CAPTURE_QUEUE,
-                VIDEO_QUEUE,
-                SENDER,
-                self.stats_interval,
-            ));
+            self.meter = Some(attach_meter(bin, self.stats_interval));
         }
         pipeline
             .set_state(gst::State::Playing)
@@ -262,15 +286,7 @@ impl MediaStream for ScreenStream {
             route.refresh();
         }
         self.apply_sound_delay();
-        let bus = self.pipeline.as_ref()?.bus()?;
-        let message = bus.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])?;
-        match message.view() {
-            gst::MessageView::Error(error) => {
-                warn!(error = %error.error(), debug = ?error.debug(), "stream error");
-                Some(error.error().to_string())
-            }
-            _ => Some("the capture ended unexpectedly".to_owned()),
-        }
+        pipeline_failure(self.pipeline.as_ref()?)
     }
 }
 

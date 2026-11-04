@@ -33,6 +33,8 @@ pub struct Encoder {
     description: &'static str,
     /// The property that sets the distance between key frames.
     key_frame_property: &'static str,
+    /// Better pictures for more work, for when low delay does not matter.
+    film_settings: &'static str,
 }
 
 /// Forces one encoder by element name, to tell encoder problems from others.
@@ -43,12 +45,14 @@ const ENCODER_OVERRIDE_VARIABLE: &str = "MONITORBEAM_ENCODER";
 const ENCODERS: [Encoder; 2] = [
     Encoder {
         key_frame_property: "gop-size",
+        film_settings: "preset=p4 tune=high-quality",
         name: "nvcudah264enc",
         description: "nvcudah264enc preset=p1 tune=ultra-low-latency rate-control=cbr \
                       bitrate=8000 gop-size=30 b-frames=0 aud=true",
     },
     Encoder {
         key_frame_property: "key-int-max",
+        film_settings: "speed-preset=veryfast",
         name: "x264enc",
         description: "x264enc tune=zerolatency speed-preset=ultrafast bitrate=8000 \
                       key-int-max=30",
@@ -90,6 +94,15 @@ impl Encoder {
             description.push_str(&format!(" bitrate={bitrate}"));
         }
         description
+    }
+
+    /// The description for a film, where a picture need not leave at once. One key
+    /// frame per `key_frame_distance` frames leaves more of the bitrate for the rest.
+    pub fn film_description(&self, bitrate_kbit: u32, key_frame_distance: u32) -> String {
+        format!(
+            "{} {} {}={key_frame_distance} bitrate={bitrate_kbit}",
+            self.description, self.film_settings, self.key_frame_property
+        )
     }
 
     pub fn name(&self) -> &'static str {
@@ -443,6 +456,7 @@ mod tests {
             key_frame_property: "unused",
             name: "missing",
             description: "this-element-does-not-exist",
+            film_settings: "",
         };
         assert!(!encoder.works());
     }

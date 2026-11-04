@@ -1,5 +1,6 @@
 //! Screen capture: monitor discovery, capture regions, recording and streaming.
 
+pub mod file_stream;
 pub mod monitor;
 pub mod recorder;
 pub mod stream;

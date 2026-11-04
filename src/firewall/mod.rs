@@ -1,16 +1,18 @@
 //! Session-scoped firewall rules for the Wi-Fi Direct interface.
 //!
-//! All privileged work happens in `monitorbeam-firewall-helper`, started through
-//! `pkexec`. The helper removes the rules when the pipe to it closes, so a
-//! crash of this program cannot leave them behind. Only the helper being killed
-//! can, and then `restore_stale` finds them through the helper's marker file.
+//! All privileged work happens in `monitorbeam-firewall-helper`, started once through
+//! `pkexec`, so that the administrator password is needed once while the program runs.
+//! The helper opens the firewall only for each session. It removes the rules when the
+//! pipe to it closes, so a crash of this program cannot leave them behind. Only the
+//! helper being killed can, and then `restore_stale` finds them through its marker file.
 
 pub mod protocol;
 
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::{Mutex, PoisonError};
 
 use thiserror::Error;
 use tracing::{debug, info, warn};
@@ -21,6 +23,8 @@ const PKEXEC: &str = "/usr/bin/pkexec";
 /// Fixed and root-owned: the polkit policy authorizes exactly this path.
 const HELPER_PATH: &str = "/usr/libexec/monitorbeam/monitorbeam-firewall-helper";
 const READY: &str = "ready";
+const CLOSED: &str = "closed";
+const ERROR_PREFIX: &str = "error ";
 const UFW_CONFIG: &str = "/etc/ufw/ufw.conf";
 const FIREWALL_CMD: &str = "firewall-cmd";
 /// `pkexec` exit codes when authorization was dismissed or refused.
@@ -41,28 +45,24 @@ pub enum FirewallError {
     Io(#[from] io::Error),
     #[error("the firewall helper failed: {0}")]
     Helper(String),
+    /// The helper is fine, but will not do what was asked.
+    #[error("the firewall helper refused: {0}")]
+    Refused(String),
 }
 
-/// An open firewall for one session. Rules last until `close` or drop.
+/// The running helper. It stays until the program ends, when the pipe closes.
+static HELPER: Mutex<Option<Helper>> = Mutex::new(None);
+
+/// The waiting helper, and the way to talk to it.
 #[derive(Debug)]
-pub struct FirewallSession {
+struct Helper {
     child: Child,
     stdin: Option<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
 }
 
-impl FirewallSession {
-    /// Opens the firewall on `interface`. May ask for the administrator
-    /// password and so block for a long time: do not call on the GTK thread.
-    pub fn open(interface: &str) -> Result<Self, FirewallError> {
-        if !is_valid_p2p_interface(interface) {
-            return Err(FirewallError::InvalidInterface(interface.to_owned()));
-        }
-        ensure_helper_installed(Path::new(HELPER_PATH))?;
-        let session = Self::spawn(PKEXEC, &[HELPER_PATH, "open", interface])?;
-        info!(interface, "firewall opened for session");
-        Ok(session)
-    }
-
+impl Helper {
+    /// Starts the helper, which may ask for the password, and waits until it is ready.
     fn spawn(program: &str, args: &[&str]) -> Result<Self, FirewallError> {
         let mut child = helper_command(program, args)
             .stdin(Stdio::piped())
@@ -74,15 +74,106 @@ impl FirewallSession {
             .stdout
             .take()
             .ok_or_else(|| FirewallError::Helper("no output pipe".to_owned()))?;
-
-        let mut line = String::new();
-        BufReader::new(stdout.take(MAX_LINE_LENGTH)).read_line(&mut line)?;
-        if line.trim_end() == READY {
-            return Ok(Self { child, stdin });
+        let mut stdout = BufReader::new(stdout);
+        if matches!(read_answer(&mut stdout), Ok(answer) if answer == READY) {
+            return Ok(Self {
+                child,
+                stdin,
+                stdout,
+            });
         }
+        // Without its pipes, a helper that is still writing stops instead of blocking.
         drop(stdin);
+        drop(stdout);
         let status = child.wait()?;
         Err(helper_failure(status, &mut child))
+    }
+
+    /// Sends a command, and returns when the helper has carried it out.
+    fn command(&mut self, command: &str, success: &str) -> Result<(), FirewallError> {
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| FirewallError::Helper("the helper has stopped".to_owned()))?;
+        writeln!(stdin, "{command}")?;
+        stdin.flush()?;
+        let answer = read_answer(&mut self.stdout)?;
+        if answer == success {
+            return Ok(());
+        }
+        let reason = answer.strip_prefix(ERROR_PREFIX).unwrap_or(&answer);
+        Err(FirewallError::Refused(reason.to_owned()))
+    }
+}
+
+impl Drop for Helper {
+    fn drop(&mut self) {
+        // Closing the pipe is what tells the helper to finish.
+        drop(self.stdin.take());
+        if let Err(error) = self.child.wait() {
+            warn!(%error, "cannot wait for the firewall helper");
+        }
+    }
+}
+
+/// One line from the helper, which is not trusted to end it.
+fn read_answer(stdout: &mut BufReader<ChildStdout>) -> Result<String, FirewallError> {
+    let mut line = String::new();
+    stdout.by_ref().take(MAX_LINE_LENGTH).read_line(&mut line)?;
+    if !line.ends_with('\n') {
+        return Err(FirewallError::Helper("the helper has stopped".to_owned()));
+    }
+    Ok(line.trim_end().to_owned())
+}
+
+fn the_helper() -> std::sync::MutexGuard<'static, Option<Helper>> {
+    // A panic elsewhere cannot make the helper unusable.
+    HELPER.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn start_helper() -> Result<Helper, FirewallError> {
+    ensure_helper_installed(Path::new(HELPER_PATH))?;
+    Helper::spawn(PKEXEC, &[HELPER_PATH, "serve"])
+}
+
+/// Runs `command` on the helper, starting it if it does not run yet. If it was killed
+/// since, it starts again, which asks for the password again.
+fn with_helper(command: &str, success: &str) -> Result<(), FirewallError> {
+    let mut slot = the_helper();
+    let mut helper = match slot.take() {
+        Some(helper) => helper,
+        None => start_helper()?,
+    };
+    let mut answer = helper.command(command, success);
+    // A refusal comes from a working helper. Anything else means that it has gone.
+    if answer
+        .as_ref()
+        .is_err_and(|error| !matches!(error, FirewallError::Refused(_)))
+    {
+        drop(helper);
+        helper = start_helper()?;
+        answer = helper.command(command, success);
+    }
+    *slot = Some(helper);
+    answer
+}
+
+/// An open firewall for one session. Rules last until `close` or drop.
+#[derive(Debug)]
+pub struct FirewallSession {
+    open: bool,
+}
+
+impl FirewallSession {
+    /// Opens the firewall on `interface`. May ask for the administrator
+    /// password and so block for a long time: do not call on the GTK thread.
+    pub fn open(interface: &str) -> Result<Self, FirewallError> {
+        if !is_valid_p2p_interface(interface) {
+            return Err(FirewallError::InvalidInterface(interface.to_owned()));
+        }
+        with_helper(&format!("open {interface}"), READY)?;
+        info!(interface, "firewall opened for session");
+        Ok(Self { open: true })
     }
 
     /// Removes the rules and reports whether that worked.
@@ -91,23 +182,23 @@ impl FirewallSession {
     }
 
     fn end(&mut self) -> Result<(), FirewallError> {
-        // Closing the pipe is what tells the helper to remove the rules.
-        drop(self.stdin.take());
-        let status = self.child.wait()?;
-        if status.success() {
-            debug!("firewall closed");
-            Ok(())
-        } else {
-            Err(helper_failure(status, &mut self.child))
+        if !self.open {
+            return Ok(());
         }
+        self.open = false;
+        // A helper that is gone has removed the rules, or left them for
+        // `restore_stale`. Starting it again here would only ask for a password.
+        if let Some(helper) = the_helper().as_mut() {
+            helper.command("close", CLOSED)?;
+        }
+        debug!("firewall closed");
+        Ok(())
     }
 }
 
 impl Drop for FirewallSession {
     fn drop(&mut self) {
-        if self.stdin.is_some()
-            && let Err(error) = self.end()
-        {
+        if let Err(error) = self.end() {
             warn!(%error, "cannot close the firewall");
         }
     }
@@ -206,13 +297,16 @@ pub fn restore_stale() -> Result<(), FirewallError> {
     Ok(())
 }
 
-/// Asks for the administrator password now, so that opening the firewall later
-/// does not keep the TV waiting. Polkit remembers the answer for a few minutes.
-/// The cleanup command is harmless when there is nothing to clean up. May block
-/// for a long time: do not call on the GTK thread.
+/// Starts the helper now if it does not run yet, which asks for the administrator
+/// password, so that opening the firewall later does not keep the TV waiting. It
+/// needs asking only once while the program runs. May block for a long time: do not
+/// call on the GTK thread.
 pub fn authorize() -> Result<(), FirewallError> {
-    ensure_helper_installed(Path::new(HELPER_PATH))?;
-    run_to_end(PKEXEC, &[HELPER_PATH, "cleanup"])
+    let mut slot = the_helper();
+    if slot.is_none() {
+        *slot = Some(start_helper()?);
+    }
+    Ok(())
 }
 
 fn run_to_end(program: &str, args: &[&str]) -> Result<(), FirewallError> {
@@ -245,25 +339,41 @@ mod tests {
     }
 
     /// A stand-in for the helper, as a shell script.
-    fn fake_helper(script: &str) -> Result<FirewallSession, FirewallError> {
-        FirewallSession::spawn(SHELL, &["-c", script])
+    fn fake_helper(script: &str) -> Result<Helper, FirewallError> {
+        Helper::spawn(SHELL, &["-c", script])
     }
 
     #[test]
-    fn open_succeeds_when_helper_is_ready() {
-        let session = fake_helper("echo ready; cat > /dev/null").unwrap();
-        session.close().unwrap();
+    fn the_helper_carries_out_several_sessions_without_starting_again() {
+        let script = "echo ready; while read command; do \
+                      case \"$command\" in open*) echo ready;; close) echo closed;; esac; done";
+        let mut helper = fake_helper(script).unwrap();
+        for _ in 0..3 {
+            helper.command("open p2p-test0", READY).unwrap();
+            helper.command("close", CLOSED).unwrap();
+        }
     }
 
     #[test]
-    fn close_tells_the_helper_to_finish_and_reports_its_failure() {
-        let script = "echo ready; cat > /dev/null; echo rules remain >&2; exit 1";
-        let error = fake_helper(script).unwrap().close().unwrap_err();
-        assert!(matches!(error, FirewallError::Helper(message) if message == "rules remain"));
+    fn a_refusal_gives_its_reason() {
+        let script = "echo ready; read command; echo error no such interface; cat > /dev/null";
+        let mut helper = fake_helper(script).unwrap();
+        let error = helper.command("open p2p-test0", READY).unwrap_err();
+        assert!(
+            matches!(&error, FirewallError::Refused(reason) if reason == "no such interface"),
+            "{error}"
+        );
     }
 
     #[test]
-    fn dropping_a_session_waits_for_the_helper() {
+    fn a_helper_that_has_gone_is_noticed() {
+        let mut helper = fake_helper("echo ready; exit 0").unwrap();
+        let error = helper.command("open p2p-test0", READY).unwrap_err();
+        assert!(!matches!(error, FirewallError::Refused(_)), "{error}");
+    }
+
+    #[test]
+    fn dropping_the_helper_tells_it_to_finish_and_waits() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!("monitorbeam-drop-test-{}", std::process::id()));
         let script = format!(
