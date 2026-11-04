@@ -94,9 +94,12 @@ control software) were rejected as taken. The local folder may still be called `
 
 ## Firewall design
 
-`monitorbeam-firewall-helper` (std only, no project dependencies) runs as root through `pkexec`. Its
-stdin pipe stays open for the session, and it removes the rules on EOF, so a crash of the program is
-covered. With ufw it inserts non-persistent `iptables` rules into `INPUT` rather than `ufw` rules,
+`monitorbeam-firewall-helper` (std only, no project dependencies) runs as root through `pkexec`, started once per run of
+the program (the first Share with a firewall running), so that the password is needed once, as the user asked. It then waits
+for `open <interface>` and `close` on stdin, so rule 2 still holds: the rules exist only during a session. The user first
+asked for the port to stay open while the program runs, and this gives the same result without that. Its stdin pipe stays
+open, and it removes the rules on EOF, so a crash of the program is covered. The policy is plain `auth_admin` now, since
+nothing depends on polkit remembering the answer. With ufw it inserts non-persistent `iptables` rules into `INPUT` rather than `ufw` rules,
 which would be saved to disk. Its root-owned marker `/run/monitorbeam-firewall` records a session and
 replaces a state file in XDG directories: it cannot be forged and disappears at boot, like the
 rules. The firewalld path needs the installed `monitorbeam` zone and has not been run on a real
@@ -119,6 +122,26 @@ The UDP send buffer is 2 MB, because a key frame (up to about 330 kB) overflowed
 counter first if stutter returns.
 The default stays 30 fps: on the real TV, 60 fps showed the ball's bounce more often but stuttered
 more. `MONITORBEAM_FRAME_RATE=60` still requests it; a choice in the window could be added later.
+
+## Video file design
+
+`capture/file_stream.rs` sends a file through the same `stream_description` as a monitor. A player pipeline (`playbin`)
+decodes ahead into appsinks with short queues, and the sender pipeline runs from appsrcs and never stops. One thread
+moves data between them each frame, following its own position in the film, and takes picture and sound by their time
+in the file, so they cannot drift. Pausing or seeking only changes that position, while the sender repeats the last
+picture with silence, as the user asked: the TV sees an ordinary stream. Subtitles are a `textoverlay` in the sender,
+so they can change during a pause, and the file is untouched. Its `text` is read as markup, so it is escaped. The
+appsrc's caps must include `interlace-mode=progressive`, or `nvcudah264enc` refuses them, which `x264enc` does not
+show: test with `Encoder::detect` too. Measured through decoding the stream again: sound is about 42 ms after the
+picture, constant through pause and seek, from the AAC encoder. Monitor sharing has not been measured the same way.
+
+A film uses `Encoder::film_description`: a slower preset and 16 Mbit/s by default (Video File Quality in Preferences),
+with one key frame per second. It asks for 60 fps unless the user chose a rate, because 24 fps divides better into 60.
+`Playback::load` changes the file behind the running sender, so a playlist needs no new connection. `watch_positions.rs`
+saves where films were left, by checksum of the path. `TvPanel::run_with_reconnects` makes a lost connection again up to
+three times, only if the TV had shown the picture and neither the TV nor the user ended the session.
+
+`examples/file_stream.rs` streams a file to a local UDP port, for checks without a TV.
 
 ## Audio design
 
@@ -154,7 +177,18 @@ while connecting.
 
 Still unconfirmed, and listed in `README.md`: the firewalld path, and asking to open the firewall after 12 seconds.
 
-Version 0.1.0 is released on GitHub with its `.deb`. For a new release, update `CHANGELOG.md` and the version in
+Version 0.2.0 (2026-11-04) adds playing video files with a playlist and SRT subtitles. The user tested film playback at 60 fps,
+the playlist and the single password on the real TV. Not reported on individually, so ask if problems appear: higher film
+quality, going on from where a film was left, keyboard shortcuts, film volume, Play and Pause in the tray, and connecting again
+after a lost connection. The user asked to leave open: subtitles inside video files (explain and ask again), HDR, an
+independent security review, GitHub Actions, and AppStream data.
+
+After a session, the real TV cannot be found or connected for about three minutes, confirmed by the user on 2026-11-04 with
+Screen Mirroring open. The logs show the session itself ends properly, so this is the TV. The program now searches for
+up to 4 minutes after each session, says so on the TV's row, and hints after 20 seconds without an answer. An idea offered to
+the user, not decided: changing the source during a session, keeping the connection, which would avoid that wait.
+
+Versions 0.1.0 and 0.2.0 are released on GitHub with their `.deb`. For a new release, update `CHANGELOG.md` and the version in
 `Cargo.toml`, and view any new screenshot first. Ask the user about: GitHub Actions for the checks, and real fuzz
 targets. Translations were declined for now: the program stays in English. Flatpak was left out on purpose: the
 sandbox conflicts with pkexec, NetworkManager access and X11 capture.
@@ -165,7 +199,8 @@ Network Displays may exist; it is not ours, so it is never removed automatically
 
 ## Window and tray
 
-The window has a fixed size, 970 × 630, and must not need a scrollbar, also on a 1366 × 768 screen. Anything
+The monitors' card also holds the video file controls, chosen under Source: settings on the left, an always visible
+playlist on the right, and playing controls below. The window has a fixed size, 970 × 630, and must not need a scrollbar, also on a 1366 × 768 screen. Anything
 that appears later must not change its size: a recording's preview takes the monitors' place, and there are no
 banners, which used to cover the content. A non-resizable window follows its content's natural size, so a `ScrolledWindow` with
 `External` scrollbars holds the size. It clips anything too tall, so check the content's height after changing the
@@ -204,10 +239,7 @@ dependencies, and keep `deny.toml` compatible with GPL-3.0-or-later.
 
 ## Open questions
 
-- The polkit policy uses `auth_admin_keep`, so for a few minutes after the password, other programs of the same
-  user could start the helper without asking. `firewall::authorize` depends on it: it asks early, and the firewall
-  opens later with no second prompt. Plain `auth_admin` would need that flow changed. The helper's fixed actions
-  limit the risk. An independent review of the helper is still worth doing before promoting the program.
+- An independent review of the helper is still worth doing before promoting the program.
 - `deny.toml` ignores three "unmaintained" advisories for zbus 5 crates (not vulnerabilities), needed by
   `ksni`. Remove them when `ksni` moves to zbus 6, then move this project back to zbus 6 as well.
 - Real fuzz targets (`cargo-fuzz`) need a nightly toolchain, postponed: the user is not familiar with
