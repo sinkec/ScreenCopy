@@ -13,6 +13,7 @@ use gtk::{gio, glib};
 use tracing::{debug, error};
 
 use super::section::Section;
+use crate::capture::file_stream::{FilmQuality, Playback};
 use crate::capture::monitor::Monitor;
 use crate::capture::recorder::Encoder;
 use crate::capture::stream_stats::StreamStats;
@@ -24,7 +25,7 @@ use crate::settings::{
 use crate::tv_memory::{KnownTv, TvFormat, TvMemory};
 use crate::wfd::params::{VideoMode, VideoPreference};
 use crate::wfd::session::{SessionEvent, Sound};
-use crate::wfd::{self, ServeConfig, ServeEvent};
+use crate::wfd::{self, MediaSource, ServeConfig, ServeEvent};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const SOUND_DELAY_STEP_MS: f64 = 10.0;
@@ -42,9 +43,70 @@ const RECOMMENDED_FORMAT: TvFormat = TvFormat {
     height: 1080,
     frame_rate: 30,
 };
+/// Films at 24 frames per second divide evenly into 60 far better than into 30, and
+/// this was smooth on a real TV.
+const FILM_FRAME_RATE: u32 = 60;
+/// Long enough for a TV that was only turned away for a moment.
+const MAX_RECONNECTS: u32 = 3;
+const RECONNECT_DELAY: Duration = Duration::from_secs(3);
+/// A TV usually answers within seconds, unless it asks for confirmation. On the real
+/// TV, a second connection right after a session got no answer at all.
+const TV_SILENT_AFTER: Duration = Duration::from_secs(20);
+const TV_SILENT: &str = "The TV is not answering. Is Screen Mirroring still open on it?";
+/// The real TV stayed out of reach for about three minutes after a session.
+const SEARCH_ROUNDS_AFTER_SESSION: u32 = 8;
+const LOOKING: &str = "Looking for this TV…";
+const LOOKING_AFTER_SESSION: &str = "The TV may need up to 3 minutes to be ready again…";
+
 const MESSAGE_ICON_SIZE: i32 = 32;
 const MESSAGE_SPACING: i32 = 12;
 const MESSAGE_MARGIN: i32 = 18;
+
+/// What one try at a session needs to know, and tells.
+struct Attempt<'a> {
+    open_firewall: bool,
+    stop: Arc<AtomicBool>,
+    /// Set once the TV shows the picture.
+    shown: &'a Cell<bool>,
+}
+
+/// What to share, as the window sees it.
+pub enum ShareSource {
+    Monitor(Monitor),
+    File(Arc<Playback>, FilmQuality),
+}
+
+impl ShareSource {
+    fn media(&self) -> MediaSource {
+        match self {
+            Self::Monitor(monitor) => MediaSource::Monitor(monitor.capture_region()),
+            Self::File(playback, quality) => MediaSource::File(Arc::clone(playback), *quality),
+        }
+    }
+
+    /// For the window's title, while the TV shows this.
+    fn describe_on(&self, tv: &str) -> String {
+        match self {
+            Self::Monitor(monitor) => format!("Sharing monitor {} with {tv}", monitor.name()),
+            Self::File(..) => format!("Playing on {tv}"),
+        }
+    }
+
+    /// The first word of a running session's state.
+    fn activity(&self) -> &'static str {
+        match self {
+            Self::Monitor(_) => "Sharing",
+            Self::File(..) => "Playing",
+        }
+    }
+
+    /// A new connection continues from where the last one ended.
+    fn prepare_to_go_on(&self) {
+        if let Self::File(playback, _) = self {
+            playback.prepare_to_go_on();
+        }
+    }
+}
 
 /// The widgets `TvPanel` needs from the window that hosts it.
 pub struct TvWidgets {
@@ -59,6 +121,10 @@ pub struct TvWidgets {
     pub toasts: adw::ToastOverlay,
     /// Widgets that must not change while sharing.
     pub locked: Vec<gtk::Widget>,
+    /// What to share, or why nothing can be shared yet.
+    pub source: Box<dyn Fn() -> Result<ShareSource, String>>,
+    /// Is active when a video file is what to share.
+    pub file_toggle: gtk::ToggleButton,
 }
 
 /// What the list shows about one TV.
@@ -75,6 +141,8 @@ struct TvRow {
     name: String,
     /// `None` for the last used TV until a search finds it.
     peer: Option<Peer>,
+    /// What to say while searching for a TV that has not been found.
+    looking: &'static str,
     row: adw::ActionRow,
     button: gtk::Button,
     icon: gtk::Image,
@@ -82,7 +150,7 @@ struct TvRow {
 }
 
 impl TvRow {
-    fn new(entry: TvEntry, searching: bool) -> Self {
+    fn new(entry: TvEntry, searching: bool, looking: &'static str) -> Self {
         let button = gtk::Button::builder().valign(gtk::Align::Center).build();
         let icon = gtk::Image::from_icon_name("video-display-symbolic");
         let spinner = gtk::Spinner::builder().visible(false).build();
@@ -102,6 +170,7 @@ impl TvRow {
             hw_address: entry.hw_address,
             name: entry.name,
             peer: entry.peer,
+            looking,
             row,
             button,
             icon,
@@ -115,7 +184,7 @@ impl TvRow {
         let (status, available) = match &self.peer {
             Some(peer) if peer.info.available => ("Ready", true),
             Some(_) => ("Busy", false),
-            None if searching => ("Looking for this TV…", false),
+            None if searching => (self.looking, false),
             None => ("Not found. Is Screen Mirroring on?", false),
         };
         self.show_status(status, self.peer.is_none() && searching);
@@ -157,7 +226,6 @@ impl TvRow {
 
 pub struct TvPanel {
     widgets: TvWidgets,
-    selected: Rc<RefCell<Option<Monitor>>>,
     pages: gtk::Stack,
     list: gtk::ListBox,
     message: gtk::Label,
@@ -173,6 +241,8 @@ pub struct TvPanel {
     filling_choices: Cell<bool>,
     memory: RefCell<TvMemory>,
     searching: Cell<bool>,
+    /// The search that follows a session goes on for longer.
+    after_session: Cell<bool>,
     client: RefCell<Option<Rc<P2pClient>>>,
     rows: RefCell<Vec<Rc<TvRow>>>,
     /// The row of the running session.
@@ -188,7 +258,7 @@ pub struct TvPanel {
 impl TvPanel {
     /// Fills in the sections. The buttons' signal handlers keep the panel alive
     /// with the window.
-    pub fn attach(widgets: TvWidgets, selected: Rc<RefCell<Option<Monitor>>>) {
+    pub fn attach(widgets: TvWidgets) {
         let search = gtk::Button::builder().label(SEARCH_LABEL).build();
         widgets.section.set_suffix(&search);
 
@@ -267,7 +337,6 @@ impl TvPanel {
 
         let this = Rc::new(Self {
             widgets,
-            selected,
             pages,
             list,
             message,
@@ -281,6 +350,7 @@ impl TvPanel {
             filling_choices: Cell::new(false),
             memory: RefCell::new(TvMemory::load()),
             searching: Cell::new(false),
+            after_session: Cell::new(false),
             client: RefCell::default(),
             rows: RefCell::default(),
             active: RefCell::default(),
@@ -291,6 +361,10 @@ impl TvPanel {
         });
 
         this.show_format_choices();
+        let panel = Rc::clone(&this);
+        this.widgets
+            .file_toggle
+            .connect_toggled(move |_| panel.show_frame_rate_choices());
         let panel = Rc::clone(&this);
         this.list
             .connect_row_selected(move |_, _| panel.show_format_choices());
@@ -378,6 +452,11 @@ impl TvPanel {
     async fn run_search(self: Rc<Self>) {
         let generation = self.search_generation.get() + 1;
         self.search_generation.set(generation);
+        let rounds = if self.after_session.get() {
+            SEARCH_ROUNDS_AFTER_SESSION
+        } else {
+            1
+        };
         self.searching.set(true);
         self.search.set_sensitive(false);
         self.search.set_label("Searching…");
@@ -387,7 +466,7 @@ impl TvPanel {
         self.show_message(SEARCHING, true);
         self.show_peers(Vec::new());
 
-        match self.search_until_finished(generation).await {
+        match self.search_until_finished(generation, rounds).await {
             Ok(()) => {
                 // A newer search or a session has taken over the panel.
                 if self.search_generation.get() == generation {
@@ -419,16 +498,27 @@ impl TvPanel {
         }
     }
 
-    async fn search_until_finished(self: &Rc<Self>, generation: u64) -> Result<(), P2pError> {
+    async fn search_until_finished(
+        self: &Rc<Self>,
+        generation: u64,
+        rounds: u32,
+    ) -> Result<(), P2pError> {
         let client = self.client().await?;
-        client.start_search().await?;
-        for _ in 0..SEARCH_SECONDS {
-            glib::timeout_future(REFRESH_INTERVAL).await;
-            if self.search_generation.get() != generation {
-                return Ok(());
+        for _ in 0..rounds {
+            client.start_search().await?;
+            for _ in 0..SEARCH_SECONDS {
+                glib::timeout_future(REFRESH_INTERVAL).await;
+                if self.search_generation.get() != generation {
+                    return Ok(());
+                }
+                self.show_peers(client.peers().await?);
             }
-            self.show_peers(client.peers().await?);
+            // Further rounds only wait for a TV that has not come back yet.
+            if self.rows.borrow().iter().any(|tv| tv.peer.is_some()) {
+                break;
+            }
         }
+        self.after_session.set(false);
         Ok(())
     }
 
@@ -472,7 +562,12 @@ impl TvPanel {
     }
 
     fn add_row(self: &Rc<Self>, entry: TvEntry) -> Rc<TvRow> {
-        let tv = Rc::new(TvRow::new(entry, self.searching.get()));
+        let looking = if self.after_session.get() {
+            LOOKING_AFTER_SESSION
+        } else {
+            LOOKING
+        };
+        let tv = Rc::new(TvRow::new(entry, self.searching.get(), looking));
         self.list.append(&tv.row);
 
         let panel = Rc::clone(self);
@@ -542,14 +637,19 @@ impl TvPanel {
         let formats = self.selected_formats();
         let height = chosen(&self.resolution, &self.heights.borrow());
         let rates = frame_rates_for(formats.as_deref(), height);
-        let recommended = recommended_format(formats.as_deref());
+        let for_film = self.widgets.file_toggle.is_active();
+        let recommended_rate = if for_film && rates.contains(&FILM_FRAME_RATE) {
+            FILM_FRAME_RATE
+        } else {
+            recommended_format(formats.as_deref()).frame_rate
+        };
         self.filling_choices.set(true);
         fill_choices(
             &self.frame_rate,
-            &format!("Recommended ({} fps)", recommended.frame_rate),
+            &format!("Recommended ({recommended_rate} fps)"),
             &rates,
             |rate| {
-                if rate == 60 {
+                if rate == 60 && !for_film {
                     "60 fps (can stutter more)".to_owned()
                 } else {
                     format!("{rate} fps")
@@ -606,9 +706,12 @@ impl TvPanel {
 
     /// The whole of one session, from the click to the end of sharing.
     async fn share(self: Rc<Self>, tv: Rc<TvRow>) {
-        let Some(monitor) = self.selected.borrow().clone() else {
-            self.show_toast("Choose a monitor first.");
-            return;
+        let source = match (self.widgets.source)() {
+            Ok(source) => source,
+            Err(message) => {
+                self.show_toast(&message);
+                return;
+            }
         };
         // The check below takes a moment, and a second click must not start again.
         tv.button.set_sensitive(false);
@@ -634,7 +737,9 @@ impl TvPanel {
             .set_subtitle(&format!("Connecting to {}", tv.name));
         (self.widgets.on_sharing)(true);
 
-        let result = self.run_session(&tv, &monitor, open_firewall, stop).await;
+        let result = self
+            .run_with_reconnects(&tv, &source, open_firewall, &stop)
+            .await;
         (self.widgets.on_sharing)(false);
         self.stop.replace(None);
         self.show_no_session();
@@ -643,11 +748,57 @@ impl TvPanel {
             return;
         }
         self.set_controls_enabled(true);
+        // What was found before the session may no longer be true, so the list should
+        // show what the TV does now.
+        self.after_session.set(true);
+        self.search.emit_clicked();
         match result {
             Ok(()) => self.show_toast("Sharing ended."),
+
             Err(message) => {
                 error!(error = %message, "sharing failed");
                 self.show_toast(&message);
+            }
+        }
+    }
+
+    /// Runs the session, and makes the connection again if it is lost. A session the
+    /// TV never showed, or one that it or the user ended, is not to be repeated.
+    async fn run_with_reconnects(
+        &self,
+        tv: &TvRow,
+        source: &ShareSource,
+        open_firewall: bool,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        let mut failed_attempts = 0;
+        let mut ever_shown = false;
+        loop {
+            let shown = Cell::new(false);
+            let result = self
+                .run_session(tv, source, open_firewall, Arc::clone(stop), &shown)
+                .await;
+            ever_shown |= shown.get();
+            if shown.get() {
+                failed_attempts = 0;
+            }
+            let Err(message) = result else {
+                return Ok(());
+            };
+            let stopping = stop.load(Ordering::Relaxed);
+            if !should_reconnect(ever_shown, stopping, failed_attempts) {
+                return if stopping { Ok(()) } else { Err(message) };
+            }
+            failed_attempts += 1;
+            debug!(error = %message, attempt = failed_attempts, "the connection was lost");
+            self.describe("Connection lost. Connecting again…");
+            self.widgets
+                .title
+                .set_subtitle(&format!("Connecting again to {}", tv.name));
+            source.prepare_to_go_on();
+            glib::timeout_future(RECONNECT_DELAY).await;
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
             }
         }
     }
@@ -668,9 +819,10 @@ impl TvPanel {
     async fn run_session(
         &self,
         tv: &TvRow,
-        monitor: &Monitor,
+        source: &ShareSource,
         open_firewall: bool,
         stop: Arc<AtomicBool>,
+        shown: &Cell<bool>,
     ) -> Result<(), String> {
         if open_firewall {
             self.describe("Waiting for administrator approval…");
@@ -697,14 +849,35 @@ impl TvPanel {
         if let Err(err) = client.stop_search().await {
             debug!(error = %err, "cannot stop searching");
         }
-        let link = match client.connect(&peer, &stop).await {
+        let connected = Rc::new(Cell::new(false));
+        {
+            let (connected, row, stop) = (Rc::clone(&connected), tv.row.clone(), Arc::clone(&stop));
+            glib::timeout_add_local_once(TV_SILENT_AFTER, move || {
+                if !connected.get() && !stop.load(Ordering::Relaxed) {
+                    row.set_subtitle(TV_SILENT);
+                }
+            });
+        }
+        let attempt = client.connect(&peer, &stop).await;
+        connected.set(true);
+        let link = match attempt {
             Ok(link) => link,
             Err(P2pError::Cancelled) => return Ok(()),
             Err(err) => return Err(err.to_string()),
         };
 
         let result = self
-            .serve_link(&link, tv, monitor, encoder, open_firewall, stop)
+            .serve_link(
+                &link,
+                tv,
+                source,
+                encoder,
+                Attempt {
+                    open_firewall,
+                    stop,
+                    shown,
+                },
+            )
             .await;
         client.disconnect(link).await;
         result
@@ -746,23 +919,28 @@ impl TvPanel {
         &self,
         link: &P2pLink,
         tv: &TvRow,
-        monitor: &Monitor,
+        source: &ShareSource,
         encoder: Encoder,
-        open_firewall: bool,
-        stop: Arc<AtomicBool>,
+        attempt: Attempt<'_>,
     ) -> Result<(), String> {
+        let Attempt {
+            open_firewall,
+            stop,
+            shown,
+        } = attempt;
         // What the window shows, which also takes the TV's known formats into account.
         let preference = VideoPreference {
             height: chosen(&self.resolution, &self.heights.borrow()),
             frame_rate: chosen(&self.frame_rate, &self.frame_rates.borrow()),
         };
+        let wish = film_preference(preference, matches!(source, ShareSource::File(..)));
         let config = ServeConfig {
             interface: link.interface.clone(),
             local_address: link.local_address,
-            region: monitor.capture_region(),
+            source: source.media(),
             encoder,
             sound_delay_ms: Arc::clone(&self.sound_delay_ms),
-            video_preference: preference,
+            video_preference: wish,
             open_firewall,
         };
         let (sender, events) = mpsc::channel();
@@ -800,15 +978,17 @@ impl TvPanel {
                 }
                 Ok(ServeEvent::Session(SessionEvent::Streaming(mode, sound))) => {
                     format = Some(mode);
-                    self.widgets.title.set_subtitle(&format!(
-                        "Sharing monitor {} with {}",
-                        monitor.name(),
-                        tv.name
-                    ));
+                    shown.set(true);
+                    self.widgets
+                        .title
+                        .set_subtitle(&source.describe_on(&tv.name));
                     if !stopping {
                         tv.show_sharing(&format!(
-                            "Sharing · {} × {} · {} fps",
-                            mode.width, mode.height, mode.frame_rate
+                            "{} · {} × {} · {} fps",
+                            source.activity(),
+                            mode.width,
+                            mode.height,
+                            mode.frame_rate
                         ));
                     }
                     if !mode.satisfies(preference) {
@@ -829,7 +1009,7 @@ impl TvPanel {
                 }
                 Ok(ServeEvent::Session(SessionEvent::Stats(stats))) if !stopping => {
                     if let Some(mode) = format {
-                        tv.show_sharing(&sharing_status(mode, &stats));
+                        tv.show_sharing(&sharing_status(source.activity(), mode, &stats));
                     }
                 }
                 Ok(ServeEvent::Session(_)) => {}
@@ -848,6 +1028,22 @@ impl TvPanel {
     }
 }
 
+/// Whether a lost connection is worth making again.
+fn should_reconnect(ever_shown: bool, stopping: bool, failed_attempts: u32) -> bool {
+    ever_shown && !stopping && failed_attempts < MAX_RECONNECTS
+}
+
+/// What to ask the TV for. A film prefers the frame rate that suits it, unless the
+/// user chose one.
+fn film_preference(preference: VideoPreference, for_film: bool) -> VideoPreference {
+    VideoPreference {
+        frame_rate: preference
+            .frame_rate
+            .or(for_film.then_some(FILM_FRAME_RATE)),
+        ..preference
+    }
+}
+
 /// The TV section's title, which says how many there are when the list could
 /// hide some of them.
 fn tv_heading(found: usize) -> String {
@@ -859,9 +1055,9 @@ fn tv_heading(found: usize) -> String {
 }
 
 /// A running session's state, short enough for one line on the TV's row.
-fn sharing_status(mode: VideoMode, stats: &StreamStats) -> String {
+fn sharing_status(activity: &str, mode: VideoMode, stats: &StreamStats) -> String {
     format!(
-        "Sharing · {} × {} · {} fps · {:.1} Mbit/s",
+        "{activity} · {} × {} · {} fps · {:.1} Mbit/s",
         mode.width,
         mode.height,
         stats.encoded_fps,
@@ -900,7 +1096,7 @@ fn tv_entries(last: Option<&KnownTv>, peers: Vec<Peer>) -> Vec<TvEntry> {
 }
 
 /// A message that starts lower case, as errors do, as a sentence for the window.
-fn sentence(message: &str) -> String {
+pub(super) fn sentence(message: &str) -> String {
     let mut characters = message.chars();
     characters.next().map_or_else(String::new, |first| {
         format!("{}{}.", first.to_uppercase(), characters.as_str())
@@ -1017,6 +1213,27 @@ mod tests {
     fn peer(address: &str, name: &str) -> Peer {
         let info = parse_device_info(&[0, 0, 6, 1, 0x11, 0x1C, 0x44, 0, 0x36]).unwrap();
         Peer::for_test(address, name, info)
+    }
+
+    #[test]
+    fn only_a_lost_session_is_connected_again() {
+        assert!(should_reconnect(true, false, 0));
+        assert!(should_reconnect(true, false, MAX_RECONNECTS - 1));
+        assert!(!should_reconnect(true, false, MAX_RECONNECTS));
+        assert!(!should_reconnect(false, false, 0), "it never worked");
+        assert!(!should_reconnect(true, true, 0), "the user stopped it");
+    }
+
+    #[test]
+    fn a_film_prefers_its_frame_rate_unless_one_was_chosen() {
+        let nothing = VideoPreference::default();
+        assert_eq!(film_preference(nothing, true).frame_rate, Some(60));
+        assert_eq!(film_preference(nothing, false).frame_rate, None);
+        let chosen = VideoPreference {
+            height: Some(720),
+            frame_rate: Some(30),
+        };
+        assert_eq!(film_preference(chosen, true), chosen);
     }
 
     #[test]

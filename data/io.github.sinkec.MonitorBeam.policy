@@ -6,11 +6,11 @@
   <vendor>MonitorBeam</vendor>
   <action id="io.github.sinkec.MonitorBeam.firewall">
     <description>Allow a TV to connect for screen mirroring</description>
-    <message>MonitorBeam needs to open the firewall on the Wi-Fi Direct connection while mirroring.</message>
+    <message>MonitorBeam needs to open the firewall on the Wi-Fi Direct connection, only during each session with the TV.</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
+      <allow_active>auth_admin</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/monitorbeam/monitorbeam-firewall-helper</annotate>
   </action>

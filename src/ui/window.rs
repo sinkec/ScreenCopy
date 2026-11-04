@@ -13,9 +13,11 @@ use super::monitor_picker::{self, MonitorPicker};
 use super::recording::{Recording, RecordingWidgets};
 use super::section::Section;
 use super::tray::{Tray, TrayCommand};
-use super::tv::{TvPanel, TvWidgets};
+use super::tv::{ShareSource, TvPanel, TvWidgets};
+use super::video_file::VideoFilePanel;
 use super::{APP_ID, about};
 use crate::audio;
+use crate::capture::file_stream::FilmQuality;
 use crate::firewall;
 use crate::settings::{SettingsStore, Theme};
 
@@ -25,6 +27,11 @@ const WINDOW_WIDTH: i32 = 970;
 const WINDOW_HEIGHT: i32 = 630;
 /// The one distance around and between the parts of the window.
 const SPACING: i32 = 18;
+const FILM_QUALITIES: [(&str, FilmQuality); 3] = [
+    ("Standard", FilmQuality::Standard),
+    ("High", FilmQuality::High),
+    ("Highest", FilmQuality::Highest),
+];
 const THEMES: [(&str, Theme); 3] = [
     ("System", Theme::System),
     ("Light", Theme::Light),
@@ -109,10 +116,31 @@ fn application_group(settings: &SettingsStore, has_tray: bool) -> adw::Preferenc
         store.update(|settings| settings.theme = theme);
     });
 
+    let quality_names: Vec<&str> = FILM_QUALITIES.iter().map(|(name, _)| *name).collect();
+    let quality = adw::ComboRow::builder()
+        .title("Video File Quality")
+        .subtitle("Choose a lower quality if a film stutters on the TV.")
+        .model(&gtk::StringList::new(&quality_names))
+        .build();
+    let current_quality = FILM_QUALITIES
+        .iter()
+        .position(|(_, quality)| *quality == settings.get().film_quality);
+    // The list is short enough for the conversion to be lossless.
+    quality.set_selected(current_quality.unwrap_or(1) as u32);
+    let store = settings.clone();
+    quality.connect_selected_notify(move |row| {
+        let quality = FILM_QUALITIES
+            .get(row.selected() as usize)
+            .map(|(_, quality)| *quality)
+            .unwrap_or_default();
+        store.update(|settings| settings.film_quality = quality);
+    });
+
     let group = adw::PreferencesGroup::builder()
         .title("Application")
         .build();
     group.add(&theme);
+    group.add(&quality);
     if has_tray {
         let keep = adw::SwitchRow::builder()
             .title("Keep Running in the Tray")
@@ -156,6 +184,9 @@ fn listen_to_tray(
                 Ok(TrayCommand::Show) => window.present(),
                 Ok(TrayCommand::StopSharing) => {
                     WidgetExt::activate_action(&window, "win.stop-sharing", None).ok();
+                }
+                Ok(TrayCommand::PlayOrPause) => {
+                    WidgetExt::activate_action(&window, "win.play-or-pause", None).ok();
                 }
                 Ok(TrayCommand::Quit) => app.activate_action("quit", None),
                 Err(TryRecvError::Empty) => return glib::ControlFlow::Continue,
@@ -309,34 +340,68 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let picture_section = Section::new("Picture and Sound");
     let record_action = gio::SimpleAction::new("record", None);
     window.add_action(&record_action);
-    let monitor_controls: [gtk::Widget; 2] =
-        [picker.canvas.clone().upcast(), refresh.clone().upcast()];
+    let monitor_controls: [gtk::Widget; 4] = [
+        picker.canvas.clone().upcast(),
+        refresh.clone().upcast(),
+        picker.monitor_toggle.clone().upcast(),
+        picker.file_toggle.clone().upcast(),
+    ];
 
-    TvPanel::attach(
-        TvWidgets {
-            section: tv_section.clone(),
-            picture_section: picture_section.clone(),
-            settings: settings.clone(),
-            on_sharing: {
-                let record_action = record_action.clone();
-                Box::new(move |sharing| {
-                    record_action.set_enabled(!sharing);
-                    if let Some(tray) = &tray {
-                        tray.set_sharing(sharing);
-                    }
-                })
-            },
-            window: window.clone(),
-            title: title.clone(),
-            toasts: toasts.clone(),
-            locked: monitor_controls.to_vec(),
+    let video_file = VideoFilePanel::new(&window, &toasts, &settings);
+    picker.attach_file_page(&video_file.root, &refresh);
+    if let Some(tray) = &tray {
+        let tray = Rc::clone(tray);
+        video_file.connect_playing(move |playing| tray.set_film_playing(playing));
+    }
+
+    TvPanel::attach(TvWidgets {
+        section: tv_section.clone(),
+        picture_section: picture_section.clone(),
+        settings: settings.clone(),
+        on_sharing: {
+            let record_action = record_action.clone();
+            let video_file = Rc::clone(&video_file);
+            Box::new(move |sharing| {
+                record_action.set_enabled(!sharing);
+                if !sharing {
+                    video_file.session_ended();
+                }
+                if let Some(tray) = &tray {
+                    tray.set_sharing(sharing);
+                }
+            })
         },
-        Rc::clone(&picker.selected),
-    );
+        window: window.clone(),
+        title: title.clone(),
+        toasts: toasts.clone(),
+        locked: monitor_controls.to_vec(),
+        source: {
+            let picker = Rc::clone(&picker);
+            let video_file = Rc::clone(&video_file);
+            let settings = settings.clone();
+            Box::new(move || {
+                if picker.file_is_source() {
+                    let file = video_file
+                        .prepare_to_share()
+                        .ok_or("Add a video file first.".to_owned())?;
+                    return Ok(ShareSource::File(
+                        file.playback,
+                        settings.get().film_quality,
+                    ));
+                }
+                let monitor = picker.selected.borrow().clone();
+                monitor
+                    .map(ShareSource::Monitor)
+                    .ok_or("Choose a monitor first.".to_owned())
+            })
+        },
+        file_toggle: picker.file_toggle.clone(),
+    });
 
     let mut locked_by_recording = monitor_controls.to_vec();
     locked_by_recording.push(tv_section.root.clone().upcast());
     locked_by_recording.push(picture_section.root.clone().upcast());
+    locked_by_recording.push(video_file.root.clone().upcast());
     Recording::attach(
         RecordingWidgets {
             action: record_action,

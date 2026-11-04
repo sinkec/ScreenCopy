@@ -7,6 +7,7 @@ mod section;
 pub mod splash;
 mod tray;
 mod tv;
+mod video_file;
 pub mod window;
 
 /// Also names the icon, the desktop file and the polkit policy.

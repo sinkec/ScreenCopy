@@ -4,18 +4,24 @@
 //! RTSP and DHCP on one Wi-Fi Direct interface. It takes no paths, ports or
 //! rules from its caller, and never disables the firewall.
 //!
-//!     open <interface>  opens, prints "ready", waits for stdin to close, closes
-//!     cleanup           closes what a helper that was killed left open
+//!     serve    prints "ready", then takes commands from stdin, one per line
+//!     cleanup  closes what a helper that was killed left open
 //!
-//! The caller holds stdin open for the session, so the operating system closes
-//! it however the caller ends, including a crash. With ufw the rules go into
-//! the running ruleset only, so they also cannot survive a reboot.
+//! It waits while the program runs, so that the administrator password is needed
+//! once, while the firewall is open only during each session:
+//!
+//!     open <interface>  answers "ready" or "error <reason>"
+//!     close             answers "closed" or "error <reason>"
+//!
+//! The program holds stdin open, so the operating system closes it however the
+//! program ends, including a crash, and then whatever is open gets closed. With ufw
+//! the rules go into the running ruleset only, so they also cannot survive a reboot.
 
 #[path = "../firewall/protocol.rs"]
 mod protocol;
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::process::{Command, ExitCode, Stdio};
 
 use protocol::{MARKER_PATH, Marker, is_valid_p2p_interface};
@@ -36,6 +42,8 @@ const FIREWALLD_ZONE: &str = "monitorbeam";
 
 const BACKEND_FIREWALLD: &str = "firewalld";
 const BACKEND_IPTABLES: &str = "iptables";
+/// A command and an interface name fit well within this.
+const MAX_COMMAND_LENGTH: u64 = 64;
 
 /// Runs one external command and reports whether it succeeded.
 trait Runner {
@@ -145,10 +153,32 @@ fn read_marker() -> Option<Marker> {
     Marker::parse(&fs::read_to_string(MARKER_PATH).ok()?)
 }
 
-/// Blocks until the caller goes away, for whatever reason.
-fn wait_for_caller_to_end(input: &mut impl Read) {
-    let mut buffer = [0; 64];
-    while matches!(input.read(&mut buffer), Ok(count) if count > 0) {}
+/// What the program can ask for.
+#[derive(Debug, PartialEq, Eq)]
+enum Request {
+    Open(String),
+    Close,
+}
+
+fn parse_command(line: &str) -> Option<Request> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    match fields.as_slice() {
+        ["open", interface] => Some(Request::Open((*interface).to_owned())),
+        ["close"] => Some(Request::Close),
+        _ => None,
+    }
+}
+
+/// The next command's line. `None` when the program has gone away, or has sent
+/// something too long to be a command.
+fn read_line(input: &mut impl BufRead) -> Option<String> {
+    let mut line = String::new();
+    let count = input
+        .by_ref()
+        .take(MAX_COMMAND_LENGTH)
+        .read_line(&mut line)
+        .ok()?;
+    (count > 0 && line.ends_with('\n')).then_some(line)
 }
 
 /// Closes and forgets the session. The marker stays on failure, so that the
@@ -167,7 +197,8 @@ fn remove_marker() -> Result<(), String> {
     }
 }
 
-fn command_open(interface: &str) -> Result<(), String> {
+/// Opens the rules for one session, and returns how to close them again.
+fn open_session(runner: &mut impl Runner, interface: &str) -> Result<Marker, String> {
     if !is_valid_p2p_interface(interface) {
         return Err("not a Wi-Fi Direct interface name".to_owned());
     }
@@ -178,11 +209,10 @@ fn command_open(interface: &str) -> Result<(), String> {
         if marker.helper_is_running() {
             return Err("another session is already active".to_owned());
         }
-        finish(&mut SystemRunner, &marker.backend, &marker.interface)?;
+        finish(runner, &marker.backend, &marker.interface)?;
     }
 
-    let mut runner = SystemRunner;
-    let backend = detect_backend(&mut runner);
+    let backend = detect_backend(runner);
     let marker = Marker {
         pid: std::process::id(),
         interface: interface.to_owned(),
@@ -192,19 +222,59 @@ fn command_open(interface: &str) -> Result<(), String> {
     fs::write(MARKER_PATH, marker.format())
         .map_err(|error| format!("cannot write {MARKER_PATH}: {error}"))?;
 
-    if let Err(error) = open_rules(&mut runner, backend, interface) {
-        if let Err(cleanup_error) = finish(&mut runner, backend, interface) {
+    if let Err(error) = open_rules(runner, backend, interface) {
+        if let Err(cleanup_error) = finish(runner, backend, interface) {
             return Err(format!("{error}; cleaning up also failed: {cleanup_error}"));
         }
         return Err(error);
     }
+    Ok(marker)
+}
 
+fn answer(output: &mut impl Write, text: &str) -> io::Result<()> {
+    writeln!(output, "{text}")?;
+    output.flush()
+}
+
+/// Carries out commands until the program goes away, and leaves nothing open.
+fn command_serve() -> Result<(), String> {
     let mut output = io::stdout();
-    let announced = writeln!(output, "ready").and_then(|()| output.flush());
-    if announced.is_ok() {
-        wait_for_caller_to_end(&mut io::stdin());
+    let mut runner = SystemRunner;
+    let mut input = io::stdin().lock();
+    let mut session: Option<Marker> = None;
+    let announced = answer(&mut output, "ready");
+    while announced.is_ok() {
+        let Some(line) = read_line(&mut input) else {
+            break;
+        };
+        let result = match parse_command(&line) {
+            Some(Request::Open(_)) if session.is_some() => {
+                Err("a session is already open".to_owned())
+            }
+            Some(Request::Open(interface)) => open_session(&mut runner, &interface).map(|marker| {
+                session = Some(marker);
+                "ready"
+            }),
+            Some(Request::Close) => match session.take() {
+                Some(marker) => {
+                    finish(&mut runner, &marker.backend, &marker.interface).map(|()| "closed")
+                }
+                None => Ok("closed"),
+            },
+            None => Err("unknown command".to_owned()),
+        };
+        let reply = match result {
+            Ok(text) => text.to_owned(),
+            Err(error) => format!("error {error}"),
+        };
+        if answer(&mut output, &reply).is_err() {
+            break;
+        }
     }
-    finish(&mut runner, backend, interface)
+    match session {
+        Some(marker) => finish(&mut runner, &marker.backend, &marker.interface),
+        None => Ok(()),
+    }
 }
 
 fn command_cleanup() -> Result<(), String> {
@@ -225,9 +295,9 @@ fn main() -> ExitCode {
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["open", interface] => command_open(interface),
+        ["serve"] => command_serve(),
         ["cleanup"] => command_cleanup(),
-        _ => Err("usage: open <interface> | cleanup".to_owned()),
+        _ => Err("usage: serve | cleanup".to_owned()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -351,10 +421,34 @@ mod tests {
     }
 
     #[test]
-    fn waits_until_input_ends() {
-        let mut input: &[u8] = b"anything at all";
-        wait_for_caller_to_end(&mut input);
-        assert!(input.is_empty());
+    fn reads_only_the_known_commands() {
+        assert_eq!(
+            parse_command("open p2p-wlo1-0\n"),
+            Some(Request::Open("p2p-wlo1-0".to_owned()))
+        );
+        assert_eq!(parse_command("close\n"), Some(Request::Close));
+        for line in [
+            "",
+            "\n",
+            "open\n",
+            "open a b\n",
+            "close now\n",
+            "rm -rf /\n",
+        ] {
+            assert_eq!(parse_command(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn an_endless_line_ends_the_conversation() {
+        let long = "x".repeat(1000);
+        assert_eq!(read_line(&mut long.as_bytes()), None);
+        assert_eq!(read_line(&mut "unfinished".as_bytes()), None);
+        assert_eq!(read_line(&mut "".as_bytes()), None);
+        assert_eq!(
+            read_line(&mut "close\nopen".as_bytes()),
+            Some("close\n".to_owned())
+        );
     }
 
     #[test]

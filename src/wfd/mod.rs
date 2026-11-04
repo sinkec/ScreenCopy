@@ -14,12 +14,13 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::{debug, info};
 
+use crate::capture::file_stream::{FileStream, FilmQuality, Playback};
 use crate::capture::monitor::CaptureRegion;
 use crate::capture::recorder::Encoder;
 use crate::capture::stream::ScreenStream;
 use crate::firewall::{FirewallError, FirewallSession};
 use params::VideoPreference;
-use session::{SessionError, SessionEvent};
+use session::{MediaStream, SessionError, SessionEvent};
 
 const RTSP_PORT: u16 = 7236;
 /// How long the TV may take to connect after the Wi-Fi Direct link is up.
@@ -44,11 +45,18 @@ pub enum ServeError {
     Session(#[from] SessionError),
 }
 
+/// What the TV is to show.
+#[derive(Debug, Clone)]
+pub enum MediaSource {
+    Monitor(CaptureRegion),
+    File(Arc<Playback>, FilmQuality),
+}
+
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
     pub interface: String,
     pub local_address: Ipv4Addr,
-    pub region: CaptureRegion,
+    pub source: MediaSource,
     pub encoder: Encoder,
     pub sound_delay_ms: Arc<AtomicI32>,
     pub video_preference: VideoPreference,
@@ -97,17 +105,44 @@ fn serve_session(
     // One TV per session: nothing else may connect from here on.
     drop(listener);
 
-    let mut media = ScreenStream::new(
-        config.region,
-        config.encoder,
-        config.local_address,
-        Arc::clone(&config.sound_delay_ms),
-    );
-    let result = session::run(
+    let accepted = (connection, peer_address);
+    let result = match &config.source {
+        MediaSource::Monitor(region) => {
+            let mut media = ScreenStream::new(
+                *region,
+                config.encoder,
+                config.local_address,
+                Arc::clone(&config.sound_delay_ms),
+            );
+            run_session(accepted, config, &mut media, stop, events)
+        }
+        MediaSource::File(playback, quality) => {
+            let mut media = FileStream::new(
+                Arc::clone(playback),
+                config.encoder,
+                *quality,
+                config.local_address,
+                Arc::clone(&config.sound_delay_ms),
+            );
+            run_session(accepted, config, &mut media, stop, events)
+        }
+    };
+    log_interface_traffic(&config.interface);
+    Ok(result?)
+}
+
+fn run_session(
+    (connection, peer_address): AcceptedTv,
+    config: &ServeConfig,
+    media: &mut impl MediaStream,
+    stop: &AtomicBool,
+    events: &Sender<ServeEvent>,
+) -> Result<(), SessionError> {
+    session::run(
         connection,
         config.local_address,
         peer_address,
-        &mut media,
+        media,
         config.video_preference,
         stop,
         &mut |event| {
@@ -115,9 +150,7 @@ fn serve_session(
                 debug!("nobody is listening to session events");
             }
         },
-    );
-    log_interface_traffic(&config.interface);
-    Ok(result?)
+    )
 }
 
 /// Waits for the TV. If the firewall was left closed and the TV does not come,

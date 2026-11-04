@@ -13,12 +13,15 @@ use super::APP_ID;
 pub enum TrayCommand {
     Show,
     StopSharing,
+    PlayOrPause,
     Quit,
 }
 
 #[derive(Debug)]
 struct TrayIcon {
     sharing: bool,
+    /// Whether a film is playing, if there is one.
+    film_playing: Option<bool>,
     commands: Sender<TrayCommand>,
 }
 
@@ -75,6 +78,11 @@ impl ksni::Tray for TrayIcon {
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let mut items = vec![Self::item("Open MonitorBeam", TrayCommand::Show)];
+        match self.film_playing {
+            Some(true) => items.push(Self::item("Pause", TrayCommand::PlayOrPause)),
+            Some(false) => items.push(Self::item("Play", TrayCommand::PlayOrPause)),
+            None => {}
+        }
         if self.sharing {
             items.push(Self::item("Stop Sharing", TrayCommand::StopSharing));
         }
@@ -96,6 +104,7 @@ impl Tray {
         let (commands, receiver) = mpsc::channel();
         let icon = TrayIcon {
             sharing: false,
+            film_playing: None,
             commands,
         };
         match icon.spawn() {
@@ -104,6 +113,16 @@ impl Tray {
                 warn!(%error, "no system tray available");
                 None
             }
+        }
+    }
+
+    pub fn set_film_playing(&self, film_playing: Option<bool>) {
+        if self
+            .handle
+            .update(|icon| icon.film_playing = film_playing)
+            .is_none()
+        {
+            debug!("the tray icon has stopped");
         }
     }
 
@@ -122,7 +141,14 @@ mod tests {
 
     fn icon(sharing: bool) -> (TrayIcon, Receiver<TrayCommand>) {
         let (commands, receiver) = mpsc::channel();
-        (TrayIcon { sharing, commands }, receiver)
+        (
+            TrayIcon {
+                sharing,
+                film_playing: None,
+                commands,
+            },
+            receiver,
+        )
     }
 
     fn labels(icon: &TrayIcon) -> Vec<String> {
@@ -142,6 +168,15 @@ mod tests {
             labels(&icon(true).0),
             ["Open MonitorBeam", "Stop Sharing", "Quit"]
         );
+    }
+
+    #[test]
+    fn a_film_can_be_paused_from_the_tray() {
+        let (mut icon, _receiver) = icon(true);
+        icon.film_playing = Some(true);
+        assert!(labels(&icon).contains(&"Pause".to_owned()));
+        icon.film_playing = Some(false);
+        assert!(labels(&icon).contains(&"Play".to_owned()));
     }
 
     #[test]
